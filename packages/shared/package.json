@@ -1,0 +1,7 @@
+{
+  "name": "@codearena/shared",
+  "version": "0.0.1",
+  "private": true,
+  "main": "src/index.js",
+  "description": "Shared utilities placeholder for CodeArena (Milestone 0)"
+}

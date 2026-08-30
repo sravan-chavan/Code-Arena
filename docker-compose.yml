@@ -1,0 +1,185 @@
+# CodeArena Milestone 0 — local development stack
+# Judge0 is intentionally disabled until an official local setup is decided.
+
+name: codearena
+
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: codearena-nginx
+    restart: unless-stopped
+    ports:
+      - "${NGINX_PORT:-8080}:80"
+    volumes:
+      - ./infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      admin:
+        condition: service_started
+      client:
+        condition: service_started
+    networks:
+      - codearena
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  admin:
+    build:
+      context: ./apps/admin
+      dockerfile: Dockerfile
+    container_name: codearena-admin
+    restart: unless-stopped
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: ${ADMIN_INTERNAL_PORT:-3000}
+    ports:
+      - "${ADMIN_PORT:-3001}:${ADMIN_INTERNAL_PORT:-3000}"
+    networks:
+      - codearena
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/admin/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  client:
+    build:
+      context: ./apps/client
+      dockerfile: Dockerfile
+    container_name: codearena-client
+    restart: unless-stopped
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: ${CLIENT_INTERNAL_PORT:-3000}
+    ports:
+      - "${CLIENT_PORT:-3002}:${CLIENT_INTERNAL_PORT:-3000}"
+    networks:
+      - codearena
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/client/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  api:
+    build:
+      context: ./services/api
+      dockerfile: Dockerfile
+    container_name: codearena-api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: ${API_INTERNAL_PORT:-4000}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+    ports:
+      - "${API_PORT:-4000}:${API_INTERNAL_PORT:-4000}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - codearena
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  worker:
+    build:
+      context: ./services/worker
+      dockerfile: Dockerfile
+    container_name: codearena-worker
+    restart: unless-stopped
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: ${WORKER_INTERNAL_PORT:-4001}
+    ports:
+      - "${WORKER_PORT:-4001}:${WORKER_INTERNAL_PORT:-4001}"
+    networks:
+      - codearena
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: codearena-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - codearena_postgres_data:/var/lib/postgresql/data
+    networks:
+      - codearena
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: codearena-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    volumes:
+      - codearena_rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - codearena
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # Judge0 is deferred. Do not enable until the official local Judge0
+  # configuration for CodeArena is explicitly decided in a later milestone.
+  # judge0:
+  #   image: <official-judge0-image>
+  #   container_name: codearena-judge0
+  #   profiles: ["judge0"]
+  #   networks:
+  #     - codearena
+
+networks:
+  codearena:
+    name: codearena-network
+    driver: bridge
+
+volumes:
+  codearena_postgres_data:
+    name: codearena_postgres_data
+  codearena_rabbitmq_data:
+    name: codearena_rabbitmq_data

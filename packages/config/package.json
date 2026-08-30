@@ -1,0 +1,7 @@
+{
+  "name": "@codearena/config",
+  "version": "0.0.1",
+  "private": true,
+  "main": "src/index.js",
+  "description": "Shared configuration placeholder for CodeArena (Milestone 0)"
+}

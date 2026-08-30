@@ -1,0 +1,3 @@
+# Reserved for future RabbitMQ definitions / config.
+# Milestone 0 uses the official rabbitmq:management image with env credentials only.
+# Contest/practice/extra queues are intentionally not created yet.

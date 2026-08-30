@@ -1,0 +1,7 @@
+{
+  "name": "@codearena/types",
+  "version": "0.0.1",
+  "private": true,
+  "main": "src/index.js",
+  "description": "Shared type/constants placeholder for CodeArena (Milestone 0)"
+}

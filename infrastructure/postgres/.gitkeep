@@ -1,0 +1,2 @@
+# Reserved for future PostgreSQL init scripts / config.
+# Milestone 0 uses the official postgres image with env credentials only.
