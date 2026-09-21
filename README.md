@@ -1,8 +1,6 @@
 # CodeArena
 
-CodeArena is a Dockerized coding contest platform foundation. This repository currently contains **Milestone 0** — a working local development skeleton with separated frontends, an Express API, a worker service, PostgreSQL, RabbitMQ, and Nginx.
-
-No contest, submission, authentication, or code-execution features are implemented yet.
+CodeArena is a Dockerized coding contest platform. Milestone 0 established the infrastructure skeleton. **Milestone 1** builds the Express API foundation (modular architecture, REST standards, middleware, validation, errors, tests) without database or authentication yet.
 
 ## Architecture overview
 
@@ -191,7 +189,7 @@ Docker lifecycle targets are explicitly namespaced so they cannot be confused wi
 | `make docker-logs-client-codearena` | Follow client logs |
 | `make docker-health-codearena` | Check HTTP and container health (read-only) |
 | `make docker-clean-codearena` | Stop stack and remove orphans |
-| `make test` | Placeholder (no tests in Milestone 0) |
+| `make test` | Run API foundation tests (`services/api`) |
 | `make lint` | Placeholder |
 | `make format` | Placeholder |
 
@@ -267,7 +265,7 @@ make docker-down-codearena
 | `nginx` | Reverse proxy entry | Routes `/api`, `/admin`, `/client`; `/ws` stub |
 | `admin` | Admin Next.js app | Landing + `/admin/health` |
 | `client` | Participant Next.js app | Landing + `/client/health` |
-| `api` | Express backend | `GET /health` only |
+| `api` | Express backend | Modular M1 foundation: `/health`, `/v1/health`, standard errors |
 | `worker` | Worker process | Health HTTP server only |
 | `postgres` | Database | Healthy empty database |
 | `rabbitmq` | Message broker | Management image; no CodeArena queues yet |
@@ -321,28 +319,22 @@ From the CodeArena guardrails skill:
 
 ## Current milestone
 
-**Milestone 0 — Project Foundation**
+**Milestone 1 — Express.js Backend & REST API Foundation** (in progress on `sravan/backend`)
 
-Working Dockerized skeleton with:
+Builds on Milestone 0 with a modular Express API:
 
-- repository layout
-- Node.js 24 pinning
-- Compose stack
-- namespaced Makefile workflow
-- health-checkable services
+- `app.js` / `server.js` bootstrap
+- config, routes, controllers, services, middleware
+- `/api/health` (M0-compatible) and `/api/v1/health`
+- centralized errors, validation foundation, request logging
+- `make test` runs API tests (no database)
+
+See `MileStone-doc.md` for the full roadmap.
 
 ## Future milestones
 
-Planned (not implemented here):
+Planned next (see `MileStone-doc.md`):
 
-- authentication and users
-- contests, questions, test cases
-- RabbitMQ queues (contest / practice / extra)
-- worker consumers
-- Judge0 execution integration
-- WebSockets
-- scoring, leaderboard, admin/participant product UI
-
-## License / notes
-
-This repository is under active development. Milestone 0 is infrastructure only.
+- Milestone 2: PostgreSQL + database foundation
+- Milestone 3: Authentication & RBAC
+- Later: RabbitMQ, worker, Judge0, contests, WebSockets, etc.
