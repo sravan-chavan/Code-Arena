@@ -1,5 +1,6 @@
 const express = require('express');
 const healthRoutes = require('../health.routes');
+const authRoutes = require('../../auth/auth.routes');
 const config = require('../../config/environment');
 const { sendSuccess } = require('../../utils/api-response');
 const asyncHandler = require('../../utils/async-handler');
@@ -24,5 +25,6 @@ router.get(
 );
 
 router.use('/health', healthRoutes);
+router.use('/auth', authRoutes);
 
 module.exports = router;

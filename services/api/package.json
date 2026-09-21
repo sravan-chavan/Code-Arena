@@ -12,7 +12,9 @@
     "migrate": "node src/db/migrate.js"
   },
   "dependencies": {
+    "bcrypt": "^6.0.0",
     "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.3",
     "pg": "^8.23.0"
   },
   "devDependencies": {

@@ -52,6 +52,13 @@ function applyTestDatabaseEnv() {
   process.env.DB_CONNECTION_TIMEOUT_MS =
     process.env.DB_CONNECTION_TIMEOUT_MS || '2000';
   process.env.DB_POOL_MAX = process.env.DB_POOL_MAX || '5';
+  process.env.JWT_SECRET =
+    process.env.JWT_SECRET || 'test-only-jwt-secret-not-for-production-use';
+  process.env.JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1h';
+}
+
+function uniqueEmail(prefix = 'user') {
+  return `${prefix}-${process.pid}-${randomUUID()}@example.com`;
 }
 
 async function requirePostgres() {
@@ -78,4 +85,5 @@ module.exports = {
   applyTestDatabaseEnv,
   requirePostgres,
   uniqueKey,
+  uniqueEmail,
 };

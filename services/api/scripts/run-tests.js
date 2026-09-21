@@ -34,7 +34,14 @@ function runNodeTest(files, extraArgs = []) {
       ['--test', '--test-timeout=20000', ...extraArgs, ...files],
       {
         stdio: 'inherit',
-        env: { ...process.env, NODE_ENV: 'test' },
+        env: {
+          ...process.env,
+          NODE_ENV: 'test',
+          JWT_SECRET:
+            process.env.JWT_SECRET ||
+            'test-only-jwt-secret-not-for-production-use',
+          JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || '1h',
+        },
       },
     );
     child.on('exit', (code, signal) => {

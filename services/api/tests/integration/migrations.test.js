@@ -31,9 +31,11 @@ describe('Migrations', () => {
     const versions = applied.map((row) => row.version);
 
     assert.ok(versions.includes('001'));
+    assert.ok(versions.includes('002'));
     const second = await runMigrations();
     assert.deepEqual(second.applied, []);
     assert.ok(second.skipped.includes('001'));
+    assert.ok(second.skipped.includes('002'));
 
     const afterSecond = await getAppliedMigrations();
     assert.equal(

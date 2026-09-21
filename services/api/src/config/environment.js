@@ -4,6 +4,7 @@
  */
 
 const { loadDatabaseConfig } = require('./database');
+const { loadJwtConfig } = require('./jwt');
 
 function parsePositiveInt(value, fallback) {
   const parsed = Number.parseInt(String(value), 10);
@@ -22,9 +23,10 @@ const config = Object.freeze({
   port: parsePositiveInt(process.env.PORT, 4000),
   host: process.env.HOST || '0.0.0.0',
   serviceName: 'api',
-  milestone: 2,
+  milestone: 3,
   bodyLimit: process.env.API_BODY_LIMIT || '100kb',
   db: loadDatabaseConfig(),
+  jwt: loadJwtConfig(),
 });
 
 module.exports = config;

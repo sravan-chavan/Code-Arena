@@ -1,5 +1,6 @@
 const { createApp } = require('./app');
 const config = require('./config/environment');
+const { validateJwtConfig } = require('./config/jwt');
 const { initPool, waitForDatabase, warmPool, closePool } = require('./db/pool');
 const { runMigrations } = require('./db/migrate');
 const { logDatabaseError } = require('./db/errors');
@@ -48,7 +49,12 @@ function setupShutdown(server) {
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
+function isJwtConfigError(err) {
+  return Boolean(err && (err.code === 'JWT_CONFIG_MISSING' || err.code === 'JWT_CONFIG_INVALID'));
+}
+
 async function start() {
+  validateJwtConfig();
   initPool();
   await waitForDatabase();
   await warmPool();
@@ -69,7 +75,9 @@ async function start() {
 }
 
 start().catch(async (err) => {
-  logDatabaseError('API failed to start', err);
+  if (!isJwtConfigError(err)) {
+    logDatabaseError('API failed to start', err);
+  }
   console.error('[API] Failed to start:', err.message);
   await closePool().catch(() => {});
   process.exit(1);
