@@ -4,8 +4,8 @@ WORKDIR /app
 
 RUN apk add --no-cache wget
 
-COPY package.json ./
-RUN npm install --omit=dev
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
 COPY . .
 

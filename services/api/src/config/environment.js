@@ -3,6 +3,8 @@
  * No secrets are hardcoded.
  */
 
+const { loadDatabaseConfig } = require('./database');
+
 function parsePositiveInt(value, fallback) {
   const parsed = Number.parseInt(String(value), 10);
   if (Number.isNaN(parsed) || parsed <= 0) {
@@ -20,8 +22,9 @@ const config = Object.freeze({
   port: parsePositiveInt(process.env.PORT, 4000),
   host: process.env.HOST || '0.0.0.0',
   serviceName: 'api',
-  milestone: 1,
+  milestone: 2,
   bodyLimit: process.env.API_BODY_LIMIT || '100kb',
+  db: loadDatabaseConfig(),
 });
 
 module.exports = config;

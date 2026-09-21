@@ -1,6 +1,11 @@
 const config = require('../config/environment');
 const AppError = require('../errors/AppError');
 const { sendError } = require('../utils/api-response');
+const {
+  isDatabaseError,
+  sanitizeDatabaseError,
+  logDatabaseError,
+} = require('../db/errors');
 
 /**
  * Centralized error handler. Must be registered last.
@@ -23,9 +28,14 @@ function errorMiddleware(err, req, res, _next) {
   } else if (err instanceof SyntaxError && 'body' in err) {
     statusCode = 400;
     message = 'Invalid JSON payload';
+  } else if (isDatabaseError(err)) {
+    const safe = sanitizeDatabaseError(err);
+    statusCode = safe.statusCode;
+    message = safe.message;
+    logDatabaseError('Request failed with a database error', err);
   }
 
-  if (!config.isProduction && !(err instanceof AppError)) {
+  if (!config.isProduction && !(err instanceof AppError) && !isDatabaseError(err)) {
     console.error('[API] Unexpected error:', err);
   } else if (err instanceof AppError && !err.isOperational) {
     console.error('[API] Non-operational error:', err);

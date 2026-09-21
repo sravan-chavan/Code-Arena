@@ -8,7 +8,8 @@ include common.mk
 	docker-logs-codearena docker-clean-codearena \
 	docker-logs-api-codearena docker-logs-worker-codearena \
 	docker-logs-admin-codearena docker-logs-client-codearena \
-	test lint format
+	test test-codearena db-test-codearena db-migrate-codearena \
+	lint format
 
 help: ## Show available targets
 	@echo "CodeArena Make targets"
@@ -68,8 +69,17 @@ docker-logs-client-codearena: ## Follow CodeArena client logs
 docker-clean-codearena: ## Stop CodeArena and remove Compose orphans (keeps named volumes)
 	$(COMPOSE) down --remove-orphans
 
-test: ## Run API unit/integration tests (Milestone 1)
+test: ## Run API unit tests (no PostgreSQL required)
 	@cd services/api && npm test
+
+test-codearena: ## Run API unit + PostgreSQL integration tests
+	@cd services/api && npm run test:all
+
+db-test-codearena: ## Run PostgreSQL integration tests (requires a reachable database)
+	@cd services/api && npm run test:db
+
+db-migrate-codearena: ensure-env ## Apply pending API migrations in the running api container
+	$(COMPOSE) exec api node src/db/migrate.js
 
 lint: ## Run lint (none defined in Milestone 0)
 	@echo "No lint targets defined yet (Milestone 0 foundation)."
