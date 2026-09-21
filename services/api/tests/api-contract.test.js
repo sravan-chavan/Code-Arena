@@ -16,7 +16,7 @@ describe('API contract (Milestone 1 regression)', () => {
     const res = await request(app).get('/').expect(200);
     assert.equal(res.body.success, true);
     assert.equal(res.body.data.service, 'api');
-    assert.equal(res.body.data.milestone, 3);
+    assert.equal(res.body.data.milestone, 4);
     assert.equal(res.body.data.health, '/health');
     assert.equal(res.body.data.versionedHealth, '/v1/health');
     assert.ok(res.headers['x-request-id']);
@@ -26,7 +26,7 @@ describe('API contract (Milestone 1 regression)', () => {
     const res = await request(app).get('/v1').expect(200);
     assert.equal(res.body.success, true);
     assert.equal(res.body.data.version, 'v1');
-    assert.equal(res.body.data.milestone, 3);
+    assert.equal(res.body.data.milestone, 4);
   });
 
   it('honors incoming request IDs', async () => {
