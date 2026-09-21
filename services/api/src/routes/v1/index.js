@@ -1,5 +1,6 @@
 const express = require('express');
 const healthRoutes = require('../health.routes');
+const config = require('../../config/environment');
 const { sendSuccess } = require('../../utils/api-response');
 const asyncHandler = require('../../utils/async-handler');
 
@@ -13,7 +14,8 @@ router.get(
       {
         service: 'api',
         version: 'v1',
-        milestone: 1,
+        milestone: config.milestone,
+        databaseHealth: '/v1/health/db',
       },
       200,
       'CodeArena API v1',

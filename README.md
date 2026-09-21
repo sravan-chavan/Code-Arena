@@ -1,6 +1,6 @@
 # CodeArena
 
-CodeArena is a Dockerized coding contest platform. Milestone 0 established the infrastructure skeleton. **Milestone 1** builds the Express API foundation (modular architecture, REST standards, middleware, validation, errors, tests) without database or authentication yet.
+CodeArena is a Dockerized coding contest platform. Milestone 0 established the infrastructure skeleton. Milestone 1 built the Express API foundation. **Milestone 2** adds the PostgreSQL database foundation (connection pool, migrations, health/readiness, repository pattern) without authentication or business-domain schema.
 
 ## Architecture overview
 
@@ -70,7 +70,7 @@ CodeArena/
 │   └── config/         Shared config placeholder
 ├── infrastructure/
 │   ├── nginx/          Nginx reverse-proxy config
-│   ├── postgres/       Reserved for future DB init
+│   ├── postgres/       Reserved (API owns migrations)
 │   ├── rabbitmq/       Reserved for future queue config
 │   └── judge0/         Deferred Judge0 integration
 ├── scripts/            Developer helper scripts
@@ -133,7 +133,9 @@ Key variables:
 
 | Variable | Purpose |
 | -------- | ------- |
-| `POSTGRES_*` | Database name/user/password/port |
+| `POSTGRES_*` | PostgreSQL container name/user/password/port |
+| `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | API client connection (Compose sets `DB_HOST=postgres` inside the api container) |
+| `DB_POOL_MIN` / `DB_POOL_MAX` / `DB_IDLE_TIMEOUT_MS` / `DB_CONNECTION_TIMEOUT_MS` | API connection pool |
 | `RABBITMQ_*` | Broker credentials and ports |
 | `API_PORT` / `ADMIN_PORT` / `CLIENT_PORT` / `WORKER_PORT` | Host port bindings |
 | `NGINX_PORT` | Local entry port (default `8080`) |
@@ -189,7 +191,10 @@ Docker lifecycle targets are explicitly namespaced so they cannot be confused wi
 | `make docker-logs-client-codearena` | Follow client logs |
 | `make docker-health-codearena` | Check HTTP and container health (read-only) |
 | `make docker-clean-codearena` | Stop stack and remove orphans |
-| `make test` | Run API foundation tests (`services/api`) |
+| `make test` | Run API unit tests (no PostgreSQL required) |
+| `make test-codearena` | Run API unit + PostgreSQL integration tests |
+| `make db-test-codearena` | Run PostgreSQL integration tests |
+| `make db-migrate-codearena` | Apply pending API migrations in the api container |
 | `make lint` | Placeholder |
 | `make format` | Placeholder |
 
@@ -223,6 +228,8 @@ Manual checks (defaults; override via `.env`):
 ```bash
 curl -s http://localhost:8080/health
 curl -s http://localhost:8080/api/health
+curl -s http://localhost:8080/api/v1/health
+curl -s http://localhost:8080/api/v1/health/db
 curl -s http://localhost:8080/admin/health
 curl -s http://localhost:8080/client/health
 curl -s http://localhost:4001/health
@@ -233,7 +240,7 @@ RabbitMQ management UI: `http://localhost:15672` (credentials from `.env`).
 Expected result when the stack is healthy:
 
 ```text
-Passed: 9  Failed: 0
+Passed: 11  Failed: 0
 ```
 
 ## Shutdown workflow
@@ -265,9 +272,9 @@ make docker-down-codearena
 | `nginx` | Reverse proxy entry | Routes `/api`, `/admin`, `/client`; `/ws` stub |
 | `admin` | Admin Next.js app | Landing + `/admin/health` |
 | `client` | Participant Next.js app | Landing + `/client/health` |
-| `api` | Express backend | Modular M1 foundation: `/health`, `/v1/health`, standard errors |
+| `api` | Express backend | M2: `/health` liveness, `/v1/health/db` readiness, SQL migrations |
 | `worker` | Worker process | Health HTTP server only |
-| `postgres` | Database | Healthy empty database |
+| `postgres` | Database | Application database; API-owned migrations |
 | `rabbitmq` | Message broker | Management image; no CodeArena queues yet |
 | `judge0` | Execution engine | Deferred / commented out |
 
@@ -319,15 +326,61 @@ From the CodeArena guardrails skill:
 
 ## Current milestone
 
-**Milestone 1 — Express.js Backend & REST API Foundation** (in progress on `sravan/backend`)
+**Milestone 2 — PostgreSQL & Database Foundation** (on `sravan/backend`)
 
-Builds on Milestone 0 with a modular Express API:
+Builds on Milestone 1 with a PostgreSQL data layer for the Express API:
 
-- `app.js` / `server.js` bootstrap
-- config, routes, controllers, services, middleware
-- `/api/health` (M0-compatible) and `/api/v1/health`
-- centralized errors, validation foundation, request logging
-- `make test` runs API tests (no database)
+- Centralized `DB_*` configuration (with `POSTGRES_*` fallbacks for Compose)
+- Shared `pg` connection pool, parameterized queries, and transactions
+- Lightweight SQL migration runner tracked in `schema_migrations`
+- Minimal `app_meta` table to prove repository access (no users/contests/problems)
+- `GET /health` remains process liveness (M0 Docker compatible)
+- `GET /v1/health/db` (and `/api/v1/health/db` via Nginx) probes PostgreSQL with `SELECT 1`
+- Graceful shutdown closes the HTTP server, then the pool
+
+### Database configuration
+
+Copy `.env.example` to `.env` (never commit `.env`). The API reads:
+
+| Variable | Default | Notes |
+| -------- | ------- | ----- |
+| `DB_HOST` | `localhost` | Compose overrides to `postgres` |
+| `DB_PORT` | `5432` | |
+| `DB_NAME` | `codearena` | Same as `POSTGRES_DB` |
+| `DB_USER` | required | Same as `POSTGRES_USER` |
+| `DB_PASSWORD` | required | Same as `POSTGRES_PASSWORD` |
+| `DB_POOL_MIN` | `0` | Pre-warmed connections (pg has no native min) |
+| `DB_POOL_MAX` | `10` | |
+| `DB_IDLE_TIMEOUT_MS` | `10000` | |
+| `DB_CONNECTION_TIMEOUT_MS` | `2000` | |
+
+Do not use `localhost` for container-to-container access; the api service must use the Compose hostname `postgres`.
+
+### Migrations
+
+Migrations live in `services/api/src/migrations/` and run automatically when the API process starts. They are versioned, checksummed, and recorded in `schema_migrations`. Re-running them is a no-op for already-applied versions.
+
+```bash
+make db-migrate-codearena
+```
+
+Or from the API package (host must reach PostgreSQL on `DB_HOST`):
+
+```bash
+cd services/api && npm run migrate
+```
+
+Business tables (users, roles, problems, contests, submissions) are **not** created in Milestone 2.
+
+### Test commands
+
+```bash
+make test                 # unit tests (no PostgreSQL)
+make db-test-codearena    # integration tests against a real PostgreSQL
+make test-codearena       # unit + integration
+```
+
+Integration tests require a reachable database (the Compose `postgres` service is the intended target). They fail clearly if PostgreSQL is not available; they are not skipped.
 
 See `MileStone-doc.md` for the full roadmap.
 
@@ -335,6 +388,5 @@ See `MileStone-doc.md` for the full roadmap.
 
 Planned next (see `MileStone-doc.md`):
 
-- Milestone 2: PostgreSQL + database foundation
 - Milestone 3: Authentication & RBAC
 - Later: RabbitMQ, worker, Judge0, contests, WebSockets, etc.

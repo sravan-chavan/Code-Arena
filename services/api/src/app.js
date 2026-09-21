@@ -39,9 +39,10 @@ function createApp() {
           milestone: config.milestone,
           health: '/health',
           versionedHealth: '/v1/health',
+          databaseHealth: '/v1/health/db',
         },
         200,
-        'CodeArena API foundation (Milestone 1)',
+        'CodeArena API foundation (Milestone 2)',
       ),
     ),
   );

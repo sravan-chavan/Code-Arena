@@ -69,6 +69,8 @@ echo "======================="
 
 check_http "nginx"        "${BASE}/health"
 check_http "api via nginx" "${BASE}/api/health"
+check_http "api v1 via nginx" "${BASE}/api/v1/health"
+check_http "api db via nginx" "${BASE}/api/v1/health/db"
 check_http "admin"        "${BASE}/admin/health"
 check_http "client"       "${BASE}/client/health"
 check_http "worker direct" "http://localhost:${WORKER_PORT:-4001}/health"

@@ -1,7 +1,8 @@
 const config = require('../config/environment');
+const { checkDatabase } = require('../db/health');
 
 /**
- * Process-level health details only (no DB / RabbitMQ in Milestone 1).
+ * Process-level liveness (no PostgreSQL). Used by Docker /health.
  */
 function getHealth() {
   return {
@@ -13,6 +14,14 @@ function getHealth() {
   };
 }
 
+/**
+ * Readiness probe: actually executes SELECT 1 against PostgreSQL.
+ */
+async function getDatabaseHealth() {
+  return checkDatabase();
+}
+
 module.exports = {
   getHealth,
+  getDatabaseHealth,
 };

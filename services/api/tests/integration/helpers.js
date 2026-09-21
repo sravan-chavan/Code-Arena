@@ -1,0 +1,81 @@
+const { randomUUID } = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const { initPool, closePool } = require('../../src/db/pool');
+const { query } = require('../../src/db/query');
+
+function loadRootEnv() {
+  const envPath = path.join(__dirname, '..', '..', '..', '.env');
+  if (!fs.existsSync(envPath)) {
+    return;
+  }
+
+  const text = fs.readFileSync(envPath, 'utf8');
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) {
+      continue;
+    }
+    const separator = trimmed.indexOf('=');
+    if (separator === -1) {
+      continue;
+    }
+    const key = trimmed.slice(0, separator).trim();
+    let value = trimmed.slice(separator + 1).trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
+      value = value.slice(1, -1);
+    }
+    if (process.env[key] === undefined) {
+      process.env[key] = value;
+    }
+  }
+}
+
+function applyTestDatabaseEnv() {
+  process.env.NODE_ENV = 'test';
+  loadRootEnv();
+  process.env.DB_HOST =
+    process.env.DB_HOST || process.env.POSTGRES_HOST || '127.0.0.1';
+  process.env.DB_PORT =
+    process.env.DB_PORT || process.env.POSTGRES_PORT || '5432';
+  process.env.DB_NAME =
+    process.env.DB_NAME || process.env.POSTGRES_DB || 'codearena';
+  process.env.DB_USER =
+    process.env.DB_USER || process.env.POSTGRES_USER || 'codearena';
+  if (process.env.DB_PASSWORD === undefined) {
+    process.env.DB_PASSWORD =
+      process.env.POSTGRES_PASSWORD || 'codearena_dev_password';
+  }
+  process.env.DB_CONNECTION_TIMEOUT_MS =
+    process.env.DB_CONNECTION_TIMEOUT_MS || '2000';
+  process.env.DB_POOL_MAX = process.env.DB_POOL_MAX || '5';
+}
+
+async function requirePostgres() {
+  applyTestDatabaseEnv();
+  await closePool();
+  initPool();
+  try {
+    await query('SELECT 1 AS ok');
+  } catch (err) {
+    await closePool().catch(() => {});
+    const wrapped = new Error(
+      'PostgreSQL is required for database integration tests. Start the CodeArena stack with: make docker-up-codearena. Then re-run: make db-test-codearena',
+    );
+    wrapped.cause = err;
+    throw wrapped;
+  }
+}
+
+function uniqueKey(prefix) {
+  return `test:${prefix}:${process.pid}:${randomUUID()}`;
+}
+
+module.exports = {
+  applyTestDatabaseEnv,
+  requirePostgres,
+  uniqueKey,
+};
