@@ -1,6 +1,6 @@
 # CodeArena
 
-CodeArena is a Dockerized coding contest platform. Milestone 0 established the infrastructure skeleton. Milestone 1 built the Express API foundation. **Milestone 2** adds the PostgreSQL database foundation (connection pool, migrations, health/readiness, repository pattern) without authentication or business-domain schema.
+CodeArena is a Dockerized coding contest platform. Milestone 0 established the infrastructure skeleton. Milestone 1 built the Express API foundation. Milestone 2 added the PostgreSQL database foundation. **Milestone 3** adds authentication and RBAC (registration, login, JWT Bearer auth, ADMIN/STUDENT roles) without frontend, contests, or execution features.
 
 ## Architecture overview
 
@@ -136,6 +136,7 @@ Key variables:
 | `POSTGRES_*` | PostgreSQL container name/user/password/port |
 | `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | API client connection (Compose sets `DB_HOST=postgres` inside the api container) |
 | `DB_POOL_MIN` / `DB_POOL_MAX` / `DB_IDLE_TIMEOUT_MS` / `DB_CONNECTION_TIMEOUT_MS` | API connection pool |
+| `JWT_SECRET` / `JWT_EXPIRES_IN` | API JWT signing (required; never commit a real secret) |
 | `RABBITMQ_*` | Broker credentials and ports |
 | `API_PORT` / `ADMIN_PORT` / `CLIENT_PORT` / `WORKER_PORT` | Host port bindings |
 | `NGINX_PORT` | Local entry port (default `8080`) |
@@ -272,7 +273,7 @@ make docker-down-codearena
 | `nginx` | Reverse proxy entry | Routes `/api`, `/admin`, `/client`; `/ws` stub |
 | `admin` | Admin Next.js app | Landing + `/admin/health` |
 | `client` | Participant Next.js app | Landing + `/client/health` |
-| `api` | Express backend | M2: `/health` liveness, `/v1/health/db` readiness, SQL migrations |
+| `api` | Express backend | M3: health, DB readiness, SQL migrations, `/auth` register/login/me |
 | `worker` | Worker process | Health HTTP server only |
 | `postgres` | Database | Application database; API-owned migrations |
 | `rabbitmq` | Message broker | Management image; no CodeArena queues yet |
@@ -326,17 +327,19 @@ From the CodeArena guardrails skill:
 
 ## Current milestone
 
-**Milestone 2 — PostgreSQL & Database Foundation** (on `sravan/backend`)
+**Milestone 3 — Authentication & RBAC** (on `sravan/backend`)
 
-Builds on Milestone 1 with a PostgreSQL data layer for the Express API:
+Builds on Milestone 2 with identity, password hashing, JWT authentication, and role-based authorization:
 
-- Centralized `DB_*` configuration (with `POSTGRES_*` fallbacks for Compose)
-- Shared `pg` connection pool, parameterized queries, and transactions
-- Lightweight SQL migration runner tracked in `schema_migrations`
-- Minimal `app_meta` table to prove repository access (no users/contests/problems)
-- `GET /health` remains process liveness (M0 Docker compatible)
-- `GET /v1/health/db` (and `/api/v1/health/db` via Nginx) probes PostgreSQL with `SELECT 1`
-- Graceful shutdown closes the HTTP server, then the pool
+- `users` table via migration `002_create_users` (UUID primary keys, unique normalized email, `ADMIN`/`STUDENT` check constraint)
+- Public `POST /api/auth/register` always creates `STUDENT` (clients cannot self-assign `ADMIN`)
+- `POST /api/auth/login` returns a Bearer JWT; failed logins use a generic error
+- `GET /api/auth/me` requires `Authorization: Bearer <token>`
+- Passwords hashed with bcrypt; JWT secret and expiry come from the environment
+- Authentication and `requireRole(...)` middleware (401 vs 403)
+- ADMIN accounts are created only by controlled test/repository fixtures — there is no public admin-registration API
+
+Nginx already strips `/api`, so Express serves `/auth/register`, `/auth/login`, and `/auth/me`. Versioned aliases exist at `/v1/auth/*`.
 
 ### Database configuration
 
@@ -353,12 +356,14 @@ Copy `.env.example` to `.env` (never commit `.env`). The API reads:
 | `DB_POOL_MAX` | `10` | |
 | `DB_IDLE_TIMEOUT_MS` | `10000` | |
 | `DB_CONNECTION_TIMEOUT_MS` | `2000` | |
+| `JWT_SECRET` | required | At least 32 characters; do not use the example placeholder in production |
+| `JWT_EXPIRES_IN` | `1h` | Passed to `jsonwebtoken` (for example `1h`, `8h`) |
 
 Do not use `localhost` for container-to-container access; the api service must use the Compose hostname `postgres`.
 
 ### Migrations
 
-Migrations live in `services/api/src/migrations/` and run automatically when the API process starts. They are versioned, checksummed, and recorded in `schema_migrations`. Re-running them is a no-op for already-applied versions.
+Migrations live in `services/api/src/migrations/` and run automatically when the API process starts. They are versioned, checksummed, and recorded in `schema_migrations`. Re-running them is a no-op for already-applied versions. Never edit an already-applied migration; add a new file instead.
 
 ```bash
 make db-migrate-codearena
@@ -370,7 +375,17 @@ Or from the API package (host must reach PostgreSQL on `DB_HOST`):
 cd services/api && npm run migrate
 ```
 
-Business tables (users, roles, problems, contests, submissions) are **not** created in Milestone 2.
+### Authentication (Milestone 3)
+
+| Method | External path | Express path | Auth |
+| ------ | ------------- | ------------ | ---- |
+| `POST` | `/api/auth/register` | `/auth/register` | Public; always `STUDENT` |
+| `POST` | `/api/auth/login` | `/auth/login` | Public |
+| `GET` | `/api/auth/me` | `/auth/me` | Bearer JWT |
+
+Register/login body: `{ "email": "...", "password": "..." }`. Password minimum length is 8. Email is trimmed and lowercased. Duplicate email returns `409`. Invalid credentials return `401` with `Invalid email or password`.
+
+Frontend login UI, password reset, MFA, OAuth, refresh tokens, and session cookies are **not** part of Milestone 3.
 
 ### Test commands
 
@@ -388,5 +403,5 @@ See `MileStone-doc.md` for the full roadmap.
 
 Planned next (see `MileStone-doc.md`):
 
-- Milestone 3: Authentication & RBAC
+- Milestone 4: Admin + Participant Applications
 - Later: RabbitMQ, worker, Judge0, contests, WebSockets, etc.
