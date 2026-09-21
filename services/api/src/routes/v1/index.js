@@ -1,0 +1,26 @@
+const express = require('express');
+const healthRoutes = require('../health.routes');
+const { sendSuccess } = require('../../utils/api-response');
+const asyncHandler = require('../../utils/async-handler');
+
+const router = express.Router();
+
+router.get(
+  '/',
+  asyncHandler((_req, res) =>
+    sendSuccess(
+      res,
+      {
+        service: 'api',
+        version: 'v1',
+        milestone: 1,
+      },
+      200,
+      'CodeArena API v1',
+    ),
+  ),
+);
+
+router.use('/health', healthRoutes);
+
+module.exports = router;

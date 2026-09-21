@@ -68,8 +68,8 @@ docker-logs-client-codearena: ## Follow CodeArena client logs
 docker-clean-codearena: ## Stop CodeArena and remove Compose orphans (keeps named volumes)
 	$(COMPOSE) down --remove-orphans
 
-test: ## Run tests (none defined in Milestone 0)
-	@echo "No tests defined yet (Milestone 0 foundation)."
+test: ## Run API unit/integration tests (Milestone 1)
+	@cd services/api && npm test
 
 lint: ## Run lint (none defined in Milestone 0)
 	@echo "No lint targets defined yet (Milestone 0 foundation)."
