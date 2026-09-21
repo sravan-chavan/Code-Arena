@@ -1,6 +1,6 @@
 # CodeArena
 
-CodeArena is a Dockerized coding contest platform. Milestone 0 established the infrastructure skeleton. Milestone 1 built the Express API foundation. Milestone 2 added the PostgreSQL database foundation. **Milestone 3** adds authentication and RBAC (registration, login, JWT Bearer auth, ADMIN/STUDENT roles) without frontend, contests, or execution features.
+CodeArena is a Dockerized coding contest platform. Milestone 0 established the infrastructure skeleton. Milestone 1 built the Express API foundation. Milestone 2 added the PostgreSQL database foundation. Milestone 3 added authentication and RBAC. **Milestone 4** adds Admin and Participant application API contracts on top of that identity layer. Frontend UI remains a separate track — this backend does not implement Next.js screens.
 
 ## Architecture overview
 
@@ -170,8 +170,6 @@ CodeArena may share a machine with other Docker Compose projects (for example Ph
 - Named volumes: `codearena_postgres_data`, `codearena_rabbitmq_data`
 - Make targets namespaced with `-codearena`
 
-Host ports above do not currently collide with common PhishSheriff host bindings (Redis `6379`, VictoriaMetrics `8480–8482`). If a conflict appears later, change only CodeArena host ports in `.env` — do not modify other projects.
-
 ## CodeArena-specific Make commands
 
 Docker lifecycle targets are explicitly namespaced so they cannot be confused with another local project's Make commands.
@@ -273,7 +271,7 @@ make docker-down-codearena
 | `nginx` | Reverse proxy entry | Routes `/api`, `/admin`, `/client`; `/ws` stub |
 | `admin` | Admin Next.js app | Landing + `/admin/health` |
 | `client` | Participant Next.js app | Landing + `/client/health` |
-| `api` | Express backend | M3: health, DB readiness, SQL migrations, `/auth` register/login/me |
+| `api` | Express backend | M4: health, DB, `/auth`, `/admin` and `/student` application APIs |
 | `worker` | Worker process | Health HTTP server only |
 | `postgres` | Database | Application database; API-owned migrations |
 | `rabbitmq` | Message broker | Management image; no CodeArena queues yet |
@@ -327,19 +325,32 @@ From the CodeArena guardrails skill:
 
 ## Current milestone
 
-**Milestone 3 — Authentication & RBAC** (on `sravan/backend`)
+**Milestone 4 — Admin & Participant application APIs** (on `sravan/backend`)
 
-Builds on Milestone 2 with identity, password hashing, JWT authentication, and role-based authorization:
+Builds on Milestone 3 authentication. This backend track does **not** implement Admin or Participant UI (`apps/admin` and `apps/client` stay untouched). It provides the API contracts those Next.js apps will call later.
 
-- `users` table via migration `002_create_users` (UUID primary keys, unique normalized email, `ADMIN`/`STUDENT` check constraint)
-- Public `POST /api/auth/register` always creates `STUDENT` (clients cannot self-assign `ADMIN`)
-- `POST /api/auth/login` returns a Bearer JWT; failed logins use a generic error
-- `GET /api/auth/me` requires `Authorization: Bearer <token>`
-- Passwords hashed with bcrypt; JWT secret and expiry come from the environment
-- Authentication and `requireRole(...)` middleware (401 vs 403)
-- ADMIN accounts are created only by controlled test/repository fixtures — there is no public admin-registration API
+- Existing `POST /api/auth/register`, `POST /api/auth/login`, and `GET /api/auth/me` are unchanged
+- Public registration still always creates `STUDENT`; ADMIN accounts remain test/repository fixtures only
+- There is **no** separate `POST /api/admin/login` or `POST /api/student/login` — both apps use `/api/auth/login`
+- There is **no** `GET /api/app/me` — `GET /api/auth/me` already returns the authenticated identity `{ id, email, role }`
+- `GET /api/admin/me` and `GET /api/admin/dashboard` require Bearer JWT + `ADMIN`
+- `GET /api/student/me` and `GET /api/student/dashboard` require Bearer JWT + `STUDENT`
+- Wrong role returns `403`; missing or invalid JWT returns `401`
+- Role is taken from the server-side user record, never from request body/query/headers
+- Dashboard responses are foundation metadata only (`status: "ready"`). They do not invent contest, problem, or submission counts
+- No new database tables or migrations in M4
 
-Nginx already strips `/api`, so Express serves `/auth/register`, `/auth/login`, and `/auth/me`. Versioned aliases exist at `/v1/auth/*`.
+Nginx already strips `/api`, so Express serves `/admin/...` and `/student/...`. Versioned aliases exist at `/v1/admin/*` and `/v1/student/*`.
+
+### Access matrix
+
+| Endpoint | ADMIN | STUDENT | Unauthenticated |
+| -------- | ----- | ------- | --------------- |
+| `GET /api/auth/me` | 200 | 200 | 401 |
+| `GET /api/admin/me` | 200 | 403 | 401 |
+| `GET /api/admin/dashboard` | 200 | 403 | 401 |
+| `GET /api/student/me` | 403 | 200 | 401 |
+| `GET /api/student/dashboard` | 403 | 200 | 401 |
 
 ### Database configuration
 
@@ -375,7 +386,7 @@ Or from the API package (host must reach PostgreSQL on `DB_HOST`):
 cd services/api && npm run migrate
 ```
 
-### Authentication (Milestone 3)
+### Authentication (Milestone 3, preserved)
 
 | Method | External path | Express path | Auth |
 | ------ | ------------- | ------------ | ---- |
@@ -385,7 +396,18 @@ cd services/api && npm run migrate
 
 Register/login body: `{ "email": "...", "password": "..." }`. Password minimum length is 8. Email is trimmed and lowercased. Duplicate email returns `409`. Invalid credentials return `401` with `Invalid email or password`.
 
-Frontend login UI, password reset, MFA, OAuth, refresh tokens, and session cookies are **not** part of Milestone 3.
+### Application APIs (Milestone 4)
+
+| Method | External path | Express path | Auth |
+| ------ | ------------- | ------------ | ---- |
+| `GET` | `/api/admin/me` | `/admin/me` | Bearer JWT + `ADMIN` |
+| `GET` | `/api/admin/dashboard` | `/admin/dashboard` | Bearer JWT + `ADMIN` |
+| `GET` | `/api/student/me` | `/student/me` | Bearer JWT + `STUDENT` |
+| `GET` | `/api/student/dashboard` | `/student/dashboard` | Bearer JWT + `STUDENT` |
+
+Send `Authorization: Bearer <token>` from `POST /api/auth/login`. Do not send a client-chosen role.
+
+Frontend login UI, password reset, MFA, OAuth, refresh tokens, session cookies, contests, problems, and submissions are **not** part of Milestone 4.
 
 ### Test commands
 
@@ -403,5 +425,5 @@ See `MileStone-doc.md` for the full roadmap.
 
 Planned next (see `MileStone-doc.md`):
 
-- Milestone 4: Admin + Participant Applications
-- Later: RabbitMQ, worker, Judge0, contests, WebSockets, etc.
+- Frontend integration of these Admin/Participant APIs (separate track)
+- Milestone 5+: RabbitMQ, worker, Judge0, contests, WebSockets, etc.
