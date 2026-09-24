@@ -81,8 +81,28 @@ function uniqueKey(prefix) {
   return `test:${prefix}:${process.pid}:${randomUUID()}`;
 }
 
+/**
+ * Host-side RabbitMQ settings for integration tests.
+ * The API container uses hostname `rabbitmq`. Tests run on the host, so they
+ * use the published port on 127.0.0.1 and ignore RABBITMQ_URL.
+ */
+function applyTestRabbitEnv() {
+  process.env.NODE_ENV = 'test';
+  loadRootEnv();
+  delete process.env.RABBITMQ_URL;
+  process.env.RABBITMQ_HOST = '127.0.0.1';
+  process.env.RABBITMQ_PORT = process.env.RABBITMQ_PORT || '5672';
+  process.env.RABBITMQ_USER = process.env.RABBITMQ_USER || 'codearena';
+  if (process.env.RABBITMQ_PASSWORD === undefined) {
+    process.env.RABBITMQ_PASSWORD = 'codearena_dev_password';
+  }
+  process.env.RABBITMQ_VHOST = process.env.RABBITMQ_VHOST || '/';
+  process.env.RABBITMQ_MANAGEMENT_PORT = process.env.RABBITMQ_MANAGEMENT_PORT || '15672';
+}
+
 module.exports = {
   applyTestDatabaseEnv,
+  applyTestRabbitEnv,
   requirePostgres,
   uniqueKey,
   uniqueEmail,

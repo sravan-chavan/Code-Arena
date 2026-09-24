@@ -4,7 +4,9 @@ const port = Number(process.env.PORT || 4001);
 
 /**
  * Milestone 0 worker skeleton.
- * Does not consume RabbitMQ, call Judge0, or execute user code.
+ * Milestone 5 keeps this process health-only. RabbitMQ connect, topology,
+ * publish, and the architecture consumer live in the API process.
+ * This process does not consume queues, call Judge0, or execute user code.
  */
 const server = http.createServer((req, res) => {
   if (req.url === '/health' && req.method === 'GET') {

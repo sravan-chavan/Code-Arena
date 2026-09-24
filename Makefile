@@ -72,10 +72,10 @@ docker-clean-codearena: ## Stop CodeArena and remove Compose orphans (keeps name
 test: ## Run API unit tests (no PostgreSQL required)
 	@cd services/api && npm test
 
-test-codearena: ## Run API unit + PostgreSQL integration tests
+test-codearena: ## Run API unit + PostgreSQL + RabbitMQ integration tests
 	@cd services/api && npm run test:all
 
-db-test-codearena: ## Run PostgreSQL integration tests (requires a reachable database)
+db-test-codearena: ## Run PostgreSQL and RabbitMQ integration tests (requires the CodeArena stack)
 	@cd services/api && npm run test:db
 
 db-migrate-codearena: ensure-env ## Apply pending API migrations in the running api container
