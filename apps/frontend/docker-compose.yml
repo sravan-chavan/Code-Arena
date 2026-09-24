@@ -1,0 +1,48 @@
+# CodeArena Frontend — Docker Compose
+#
+# Runs the Next.js frontend (this app) as a container. It expects the
+# backend (Express + Nginx) to be reachable at NEXT_PUBLIC_API_URL.
+#
+# Two common setups:
+#
+# 1) Backend runs on the HOST machine (not containerized), e.g.
+#    `npm run dev` for the Express/Nginx stack on your machine:
+#      NEXT_PUBLIC_API_URL=http://host.docker.internal:8080/api
+#
+# 2) Backend runs in its OWN docker-compose stack, on a shared external
+#    network (recommended once both tracks are dockerized):
+#      docker network create codearena-net   # once
+#      # in the backend's compose file, join the same network and make
+#      # sure the Nginx service is named e.g. "nginx"
+#      NEXT_PUBLIC_API_URL=http://nginx:8080/api
+#    then set `external: true` below and remove host.docker.internal.
+#
+# NEXT_PUBLIC_API_URL is a build-time value (Next.js bakes NEXT_PUBLIC_*
+# vars into the client bundle), so changing it requires a rebuild:
+#   docker compose build --no-cache frontend
+
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://host.docker.internal:8080/api}
+    image: codearena-frontend:latest
+    container_name: codearena-frontend
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+    extra_hosts:
+      # lets the container reach a backend running on your host machine
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    networks:
+      - codearena-net
+
+networks:
+  codearena-net:
+    # Set `external: true` and `name: <shared-network-name>` once the
+    # backend also runs in Docker and you want them on the same network.
+    driver: bridge
