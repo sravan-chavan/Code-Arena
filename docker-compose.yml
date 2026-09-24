@@ -97,6 +97,8 @@ services:
       RABBITMQ_PORT: 5672
       RABBITMQ_USER: ${RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      RABBITMQ_VHOST: "/"
+      RABBITMQ_CONSUMER_ENABLED: "true"
     ports:
       - "${API_PORT:-4000}:${API_INTERNAL_PORT:-4000}"
     depends_on:

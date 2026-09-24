@@ -1,9 +1,12 @@
 const { createApp } = require('./app');
 const config = require('./config/environment');
 const { validateJwtConfig } = require('./config/jwt');
+const { loadRabbitmqConfig } = require('./config/rabbitmq');
 const { initPool, waitForDatabase, warmPool, closePool } = require('./db/pool');
 const { runMigrations } = require('./db/migrate');
 const { logDatabaseError } = require('./db/errors');
+const { logMessagingError } = require('./messaging/errors');
+const { initMessaging, closeMessaging, startSystemConsumer } = require('./messaging');
 
 let shuttingDown = false;
 
@@ -24,19 +27,21 @@ function setupShutdown(server) {
     server.close((closeError) => {
       if (closeError) {
         console.error('[API] Error during HTTP server close:', closeError.message);
-        void closePool()
-          .catch((poolError) => {
-            logDatabaseError('Error closing PostgreSQL pool during failed HTTP close', poolError);
-          })
-          .finally(() => process.exit(1));
-        return;
+      } else {
+        console.log('[API] HTTP server closed');
       }
 
-      console.log('[API] HTTP server closed');
-      void closePool()
+      void closeMessaging()
+        .then(() => {
+          console.log('[API] RabbitMQ connection closed');
+        })
+        .catch((messagingError) => {
+          logMessagingError('Error closing RabbitMQ connection', messagingError);
+        })
+        .then(() => closePool())
         .then(() => {
           console.log('[API] PostgreSQL pool closed');
-          process.exit(0);
+          process.exit(closeError ? 1 : 0);
         })
         .catch((poolError) => {
           logDatabaseError('Error closing PostgreSQL pool', poolError);
@@ -53,6 +58,15 @@ function isJwtConfigError(err) {
   return Boolean(err && (err.code === 'JWT_CONFIG_MISSING' || err.code === 'JWT_CONFIG_INVALID'));
 }
 
+function isMessagingStartupError(err) {
+  return Boolean(
+    err
+    && (err.code === 'RABBITMQ_CONFIG_MISSING'
+      || err.code === 'RABBITMQ_CONFIG_INVALID'
+      || err.code === 'RABBITMQ_UNAVAILABLE'),
+  );
+}
+
 async function start() {
   validateJwtConfig();
   initPool();
@@ -62,6 +76,13 @@ async function start() {
   console.log(
     `[API] Migrations: applied=${migrationResult.applied.length} skipped=${migrationResult.skipped.length}`,
   );
+
+  await initMessaging();
+  if (loadRabbitmqConfig().consumerEnabled) {
+    await startSystemConsumer();
+  } else {
+    console.log('[API] RabbitMQ consumer disabled by RABBITMQ_CONSUMER_ENABLED');
+  }
 
   const app = createApp();
   const server = app.listen(config.port, config.host, () => {
@@ -75,10 +96,13 @@ async function start() {
 }
 
 start().catch(async (err) => {
-  if (!isJwtConfigError(err)) {
+  if (isMessagingStartupError(err)) {
+    logMessagingError('API failed to start', err);
+  } else if (!isJwtConfigError(err)) {
     logDatabaseError('API failed to start', err);
   }
   console.error('[API] Failed to start:', err.message);
+  await closeMessaging().catch(() => {});
   await closePool().catch(() => {});
   process.exit(1);
 });
