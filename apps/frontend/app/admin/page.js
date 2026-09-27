@@ -6,17 +6,38 @@ import { metrics, contests, submissions, systemLogs, formatTime, formatTimestamp
 import { Users, Activity, CheckCircle, Clock, Server } from 'lucide-react';
 
 export default function AdminDashboard() {
-  const { user } = useAuth();
+  const { user, application, applicationError } = useAuth();
   const activeContests = contests.filter(c => c.status === 'running');
   const recentLogs = systemLogs.slice(0, 5);
   const recentSubmissions = submissions.slice(0, 5);
+  const dashboard = application?.dashboard;
+  const applicationName = application?.me?.application?.name;
 
   return (
     <div>
       <div className="page-header">
         <h1>System Overview</h1>
-        <p>Last updated: {new Date().toLocaleTimeString()}</p>
+        <p>{user?.email} · {user?.role}</p>
       </div>
+
+      <Card style={{ marginBottom: 'var(--space-lg)' }}>
+        <div className="card-header">
+          <h2 className="card-title">Application status (live API)</h2>
+        </div>
+        {applicationError ? (
+          <p style={{ color: 'var(--accent-rose)', fontSize: '0.9rem' }}>{applicationError}</p>
+        ) : dashboard ? (
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+            {applicationName || dashboard.application} · role {dashboard.role} · status {dashboard.status}
+          </p>
+        ) : (
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Loading application APIs…</p>
+        )}
+      </Card>
+
+      <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 'var(--space-md)' }}>
+        Contest, worker, and submission figures below are mock/future data — not returned by the current API.
+      </p>
 
       <div className="stats-grid">
         <div className="stat-card cyan">

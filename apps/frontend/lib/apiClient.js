@@ -2,13 +2,13 @@
 // CodeArena API Client
 // Centralized fetch wrapper for talking to the backend.
 //
-// In the browser, requests go to NEXT_PUBLIC_API_URL (baked in
-// at build time). This should point at Nginx, e.g.
-//   http://localhost:8080/api
-// The frontend must NEVER talk to Express (port 4000) directly.
+// Browser requests use the same origin as the page (Nginx :8080)
+// plus the /api prefix. Nginx strips /api and forwards to Express.
+//   POST /api/auth/login  ->  Express POST /auth/login
+// Do not call Express (:4000) or Docker DNS names from the browser.
 // ============================================================
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080/api';
+const API_BASE_URL = '/api';
 
 const TOKEN_KEY = 'codearena_token';
 
@@ -67,7 +67,6 @@ async function request(path, { method = 'GET', body, headers = {}, auth = true }
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch (networkErr) {
-    // Backend / Nginx unreachable
     throw new ApiError(
       'Unable to reach the server. Please check your connection and try again.',
       0,

@@ -30,11 +30,11 @@ export default function TopBar({ title }) {
         {user && (
           <div className="sidebar-user" style={{ padding: 0 }}>
             <div className="sidebar-user-info" style={{ alignItems: 'flex-end', marginRight: 'var(--space-sm)' }}>
-              <span className="sidebar-user-name">{user.name || user.email}</span>
+              <span className="sidebar-user-name">{user.email}</span>
               <span className="sidebar-user-role">{user.role}</span>
             </div>
             <div className="sidebar-avatar" style={{ marginRight: 'var(--space-sm)' }}>
-              {(user.name || user.email || '?').charAt(0).toUpperCase()}
+              {(user.email || '?').charAt(0).toUpperCase()}
             </div>
             <button 
               onClick={handleLogout}

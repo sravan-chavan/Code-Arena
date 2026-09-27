@@ -4,19 +4,23 @@ CodeArena is a secure, real-time coding competition platform designed for contro
 
 ## 🚀 Getting Started
 
-First, install the dependencies:
+Official integrated environment (repository root):
+
+```bash
+make docker-build-codearena
+make docker-up-codearena
+```
+
+Open [http://localhost:8080](http://localhost:8080). Nginx serves this app and `/api`.
+
+Isolated UI iteration (this directory only):
 
 ```bash
 npm install
-```
-
-Then, run the development server:
-
-```bash
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+`next dev` is not the official stack. Authentication and application APIs must be tested through `http://localhost:8080`.
 
 ---
 
@@ -83,11 +87,9 @@ codearena-frontend/
 
 ## 🔐 State Management & Data Flow
 
-*   **Authentication**: Managed via React's `Context API` (`AuthContext.js`). It wraps the entire application at the Root Layout level, providing `login()`, `logout()`, and `user` state to all components.
-*   **Route Protection**: The layouts (`app/admin/layout.js` and `app/client/layout.js`) act as route guards. If a student attempts to access `/admin/*`, the layout intercepts the render and automatically redirects them back to the client area.
-*   **Mock Backend**: Since the real backend is pending, all data (Users, Questions, Contests, Submissions) is served from `lib/mockData.js`. 
-    *   This file acts as an in-memory database.
-    *   It includes simulation functions (e.g., `simulateExecution()`) that use `setTimeout` and `Promises` to mimic network latency and asynchronous code compilation delays.
+*   **Authentication**: Managed via React's `Context API` (`AuthContext.js`). Login uses `POST /api/auth/login`; session restore uses `GET /api/auth/me`. Role-specific M4 APIs (`/api/admin/*` or `/api/student/*`) load after authentication.
+*   **Route Protection**: The layouts (`app/admin/layout.js` and `app/client/layout.js`) act as route guards (UX only). Backend RBAC remains the security boundary.
+*   **Mock / future UI**: Contest, question, and submission screens still use `lib/mockData.js` because those backend APIs do not exist yet. Dashboard identity and application status come from the live API.
 
 ## 🚀 Key Technical Highlights
 

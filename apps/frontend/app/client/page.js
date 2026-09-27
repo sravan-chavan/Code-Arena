@@ -8,20 +8,40 @@ import { Trophy, Code, CheckCircle, Activity } from 'lucide-react';
 import Link from 'next/link';
 
 export default function ClientDashboard() {
-  const { user } = useAuth();
-  
-  const userSubmissions = getSubmissionsForUser(user.id);
+  const { user, application, applicationError } = useAuth();
+  const userId = user?.id;
+  const userSubmissions = userId ? getSubmissionsForUser(userId) : [];
   const acceptedSubmissions = userSubmissions.filter(s => s.status === 'accepted').length;
-  
-  const enrolledContests = contests.filter(c => c.participantIds.includes(user.id));
+  const enrolledContests = userId ? contests.filter(c => c.participantIds.includes(userId)) : [];
   const activeEnrolled = enrolledContests.filter(c => c.status === 'running');
+  const dashboard = application?.dashboard;
+  const applicationName = application?.me?.application?.name;
 
   return (
     <div>
       <div className="page-header">
-        <h1>Welcome, {user.name}!</h1>
-        <p>Roll No: {user.rollNo}</p>
+        <h1>Welcome, {user?.email}</h1>
+        <p>Role: {user?.role}</p>
       </div>
+
+      <Card style={{ marginBottom: 'var(--space-lg)' }}>
+        <div className="card-header">
+          <h2 className="card-title">Application status (live API)</h2>
+        </div>
+        {applicationError ? (
+          <p style={{ color: 'var(--accent-rose)', fontSize: '0.9rem' }}>{applicationError}</p>
+        ) : dashboard ? (
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+            {applicationName || dashboard.application} · role {dashboard.role} · status {dashboard.status}
+          </p>
+        ) : (
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Loading application APIs…</p>
+        )}
+      </Card>
+
+      <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 'var(--space-md)' }}>
+        Contest and submission figures below are mock/future data — not returned by the current API.
+      </p>
 
       <div className="stats-grid">
         <div className="stat-card cyan">

@@ -1,5 +1,6 @@
-# CodeArena Milestone 0 — local development stack
+# CodeArena local development stack
 # Judge0 is intentionally disabled until an official local setup is decided.
+# Official UI is apps/frontend, reached only through Nginx :8080.
 
 name: codearena
 
@@ -15,10 +16,8 @@ services:
     depends_on:
       api:
         condition: service_healthy
-      admin:
-        condition: service_started
-      client:
-        condition: service_started
+      frontend:
+        condition: service_healthy
     networks:
       - codearena
     healthcheck:
@@ -28,41 +27,22 @@ services:
       retries: 5
       start_period: 10s
 
-  admin:
+  frontend:
     build:
-      context: ./apps/admin
+      context: ./apps/frontend
       dockerfile: Dockerfile
-    container_name: codearena-admin
+    container_name: codearena-frontend
     restart: unless-stopped
     environment:
-      NODE_ENV: ${NODE_ENV:-development}
-      PORT: ${ADMIN_INTERNAL_PORT:-3000}
-    ports:
-      - "${ADMIN_PORT:-3001}:${ADMIN_INTERNAL_PORT:-3000}"
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+    expose:
+      - "3000"
     networks:
       - codearena
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/admin/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 40s
-
-  client:
-    build:
-      context: ./apps/client
-      dockerfile: Dockerfile
-    container_name: codearena-client
-    restart: unless-stopped
-    environment:
-      NODE_ENV: ${NODE_ENV:-development}
-      PORT: ${CLIENT_INTERNAL_PORT:-3000}
-    ports:
-      - "${CLIENT_PORT:-3002}:${CLIENT_INTERNAL_PORT:-3000}"
-    networks:
-      - codearena
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/client/health"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/"]
       interval: 15s
       timeout: 5s
       retries: 5

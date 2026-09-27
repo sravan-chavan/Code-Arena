@@ -1,19 +1,20 @@
 // ============================================================
-// CodeArena Mock Data Service
-// In-memory data store that simulates a real backend
+// CodeArena mock / future UI data
+// Contest, question, and submission screens until those APIs exist.
+// Not live authentication data. No passwords.
 // ============================================================
 
 // ---------- Users ----------
 export const users = [
-  { id: 'admin-1', username: 'admin', password: 'admin123', name: 'Dr. Rajesh Kumar', role: 'admin', email: 'admin@codearena.local' },
-  { id: 'student-1', username: 'student1', password: 'pass123', name: 'Aarav Sharma', role: 'student', email: 'aarav@college.edu', rollNo: 'CS2021001' },
-  { id: 'student-2', username: 'student2', password: 'pass123', name: 'Priya Patel', role: 'student', email: 'priya@college.edu', rollNo: 'CS2021002' },
-  { id: 'student-3', username: 'student3', password: 'pass123', name: 'Vikram Singh', role: 'student', email: 'vikram@college.edu', rollNo: 'CS2021003' },
-  { id: 'student-4', username: 'student4', password: 'pass123', name: 'Ananya Gupta', role: 'student', email: 'ananya@college.edu', rollNo: 'CS2021004' },
-  { id: 'student-5', username: 'student5', password: 'pass123', name: 'Rohan Mehta', role: 'student', email: 'rohan@college.edu', rollNo: 'CS2021005' },
-  { id: 'student-6', username: 'student6', password: 'pass123', name: 'Sneha Reddy', role: 'student', email: 'sneha@college.edu', rollNo: 'CS2021006' },
-  { id: 'student-7', username: 'student7', password: 'pass123', name: 'Arjun Nair', role: 'student', email: 'arjun@college.edu', rollNo: 'CS2021007' },
-  { id: 'student-8', username: 'student8', password: 'pass123', name: 'Kavya Iyer', role: 'student', email: 'kavya@college.edu', rollNo: 'CS2021008' },
+  { id: 'admin-1', username: 'admin', name: 'Dr. Rajesh Kumar', role: 'admin', email: 'admin@example.invalid' },
+  { id: 'student-1', username: 'student1', name: 'Aarav Sharma', role: 'student', email: 'aarav@example.invalid', rollNo: 'CS2021001' },
+  { id: 'student-2', username: 'student2', name: 'Priya Patel', role: 'student', email: 'priya@example.invalid', rollNo: 'CS2021002' },
+  { id: 'student-3', username: 'student3', name: 'Vikram Singh', role: 'student', email: 'vikram@example.invalid', rollNo: 'CS2021003' },
+  { id: 'student-4', username: 'student4', name: 'Ananya Gupta', role: 'student', email: 'ananya@example.invalid', rollNo: 'CS2021004' },
+  { id: 'student-5', username: 'student5', name: 'Rohan Mehta', role: 'student', email: 'rohan@example.invalid', rollNo: 'CS2021005' },
+  { id: 'student-6', username: 'student6', name: 'Sneha Reddy', role: 'student', email: 'sneha@example.invalid', rollNo: 'CS2021006' },
+  { id: 'student-7', username: 'student7', name: 'Arjun Nair', role: 'student', email: 'arjun@example.invalid', rollNo: 'CS2021007' },
+  { id: 'student-8', username: 'student8', name: 'Kavya Iyer', role: 'student', email: 'kavya@example.invalid', rollNo: 'CS2021008' },
 ];
 
 // ---------- Questions ----------

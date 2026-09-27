@@ -1,6 +1,6 @@
 # CodeArena
 
-CodeArena is a Dockerized coding contest platform. Milestone 0 established the infrastructure skeleton. Milestone 1 built the Express API foundation. Milestone 2 added the PostgreSQL database foundation. Milestone 3 added authentication and RBAC. Milestone 4 added Admin and Participant application API contracts. Milestone 5 added the RabbitMQ messaging architecture. **Milestone 6** turns the Worker into a real background consumer of the execution queue, extracts shared messaging into `packages/messaging`, and keeps the API as the job publisher. It does not call Judge0 or execute user code. Frontend UI remains a separate track.
+CodeArena is a Dockerized coding contest platform. Milestone 0 established the infrastructure skeleton. Milestone 1 built the Express API foundation. Milestone 2 added the PostgreSQL database foundation. Milestone 3 added authentication and RBAC. Milestone 4 added Admin and Participant application API contracts. Milestone 5 added the RabbitMQ messaging architecture. **Milestone 6** turns the Worker into a real background consumer of the execution queue, extracts shared messaging into `packages/messaging`, and keeps the API as the job publisher. It does not call Judge0 or execute user code. The official UI is the unified Next.js app in `apps/frontend`, served through Nginx.
 
 ## Architecture overview
 
@@ -22,14 +22,24 @@ Execution Result
 Backend
 ```
 
-Milestone 0 establishes the service boundaries only:
+Current local HTTP flow:
 
-- **Admin** and **Client** are separate Next.js applications.
+```text
+Browser
+  → Nginx (:8080)
+      → /api/*  → api:4000
+      → /*      → frontend:3000
+```
+
+Service boundaries:
+
+- **Frontend** is the unified Next.js application (`apps/frontend`) at `/`, `/admin/*`, and `/client/*`.
 - **API** is a separate Express.js service (does not execute user code).
 - **Worker** is a separate Node.js service that consumes RabbitMQ execution jobs (Judge0 arrives in M7).
 - **PostgreSQL** and **RabbitMQ** provide approved infrastructure.
 - **Nginx** is the local HTTP entry point.
 - **Judge0** is deferred (directory present; Compose service commented out).
+- `apps/admin` and `apps/client` remain as Milestone 0 source skeletons and are **not** deployed.
 
 ## Docker architecture
 
@@ -37,8 +47,7 @@ Milestone 0 establishes the service boundaries only:
 Browser
   → Nginx (:8080 host → :80 container)
       → /api/*     → api:4000
-      → /admin/*   → admin:3000
-      → /client/*  → client:3000
+      → /*         → frontend:3000
       → /ws        → prepared (not implemented)
 
 postgres (volume: codearena_postgres_data)
@@ -59,8 +68,9 @@ Judge0 is **not** started in Milestone 0.
 ```text
 CodeArena/
 ├── apps/
-│   ├── admin/          Next.js admin application
-│   └── client/         Next.js participant application
+│   ├── frontend/       Official Next.js UI (login, /admin, /client)
+│   ├── admin/          Milestone 0 skeleton (not deployed)
+│   └── client/         Milestone 0 skeleton (not deployed)
 ├── services/
 │   ├── api/            Express.js backend
 │   └── worker/         Node.js Worker (execution consumer)
@@ -143,7 +153,7 @@ Key variables:
 | `RABBITMQ_CONSUMER_ENABLED` | Worker: when `true` (default), consume `codearena.execution`. API Compose sets this `false` (producer-only) |
 | `RABBITMQ_RECONNECT_ENABLED` | Worker runtime reconnect. Compose enables it for worker |
 | `CODEARENA_SERVICE_NAME` | Messaging log prefix / AMQP `appId` (`api` or `worker`) |
-| `API_PORT` / `ADMIN_PORT` / `CLIENT_PORT` / `WORKER_PORT` | Host port bindings |
+| `API_PORT` / `WORKER_PORT` | Host port bindings (API and Worker health; UI is Nginx only) |
 | `NGINX_PORT` | Local entry port (default `8080`) |
 
 Never commit real secrets.
@@ -154,11 +164,9 @@ Host ports map into container ports. Prefer changing **host** bindings in `.env`
 
 | Host port (default) | Container port | Service |
 | ------------------- | -------------- | ------- |
-| `8080` (`NGINX_PORT`) | `80` | Nginx entry |
+| `8080` (`NGINX_PORT`) | `80` | Nginx entry (UI + `/api`) |
 | `4000` (`API_PORT`) | `4000` | API (direct) |
 | `4001` (`WORKER_PORT`) | `4001` | Worker health (direct) |
-| `3001` (`ADMIN_PORT`) | `3000` | Admin (direct) |
-| `3002` (`CLIENT_PORT`) | `3000` | Client (direct) |
 | `5432` (`POSTGRES_PORT`) | `5432` | PostgreSQL |
 | `5672` (`RABBITMQ_PORT`) | `5672` | RabbitMQ AMQP |
 | `15672` (`RABBITMQ_MANAGEMENT_PORT`) | `15672` | RabbitMQ management UI |
@@ -191,8 +199,7 @@ Docker lifecycle targets are explicitly namespaced so they cannot be confused wi
 | `make docker-logs-codearena` | Follow all CodeArena logs |
 | `make docker-logs-api-codearena` | Follow API logs |
 | `make docker-logs-worker-codearena` | Follow worker logs |
-| `make docker-logs-admin-codearena` | Follow admin logs |
-| `make docker-logs-client-codearena` | Follow client logs |
+| `make docker-logs-frontend-codearena` | Follow frontend logs |
 | `make docker-health-codearena` | Check HTTP and container health (read-only) |
 | `make docker-clean-codearena` | Stop stack and remove orphans |
 | `make test` | Run API + Worker unit tests (no PostgreSQL or RabbitMQ required) |
@@ -231,11 +238,12 @@ Manual checks (defaults; override via `.env`):
 
 ```bash
 curl -s http://localhost:8080/health
+curl -s http://localhost:8080/
+curl -s http://localhost:8080/admin
+curl -s http://localhost:8080/client
 curl -s http://localhost:8080/api/health
 curl -s http://localhost:8080/api/v1/health
 curl -s http://localhost:8080/api/v1/health/db
-curl -s http://localhost:8080/admin/health
-curl -s http://localhost:8080/client/health
 curl -s http://localhost:4001/health
 ```
 
@@ -244,7 +252,7 @@ RabbitMQ management UI: `http://localhost:15672` (credentials from `.env`).
 Expected result when the stack is healthy:
 
 ```text
-Passed: 11  Failed: 0
+Passed: 13  Failed: 0
 ```
 
 ## Shutdown workflow
@@ -271,11 +279,10 @@ make docker-down-codearena
 
 ## Services
 
-| Service | Role | Milestone 0 behavior |
+| Service | Role | Current behavior |
 | ------- | ---- | -------------------- |
-| `nginx` | Reverse proxy entry | Routes `/api`, `/admin`, `/client`; `/ws` stub |
-| `admin` | Admin Next.js app | Landing + `/admin/health` |
-| `client` | Participant Next.js app | Landing + `/client/health` |
+| `nginx` | Reverse proxy entry | Routes `/api/*` to the API and `/*` to the frontend; `/ws` stub |
+| `frontend` | Unified Next.js UI | Login, `/admin/*`, `/client/*` via Nginx `:8080` |
 | `api` | Express backend | M6: health, DB, auth, admin/student APIs, RabbitMQ **producer** (no execution consumer) |
 | `worker` | Worker process | M6: consumes `codearena.execution`, job processor boundary, graceful shutdown, reconnect |
 | `postgres` | Database | Application database; API-owned migrations |
@@ -298,10 +305,10 @@ make docker-up-codearena
 Do not change another project's ports to free CodeArena.
 
 **Next.js containers unhealthy on first boot**  
-Wait for the healthcheck `start_period`, then rerun `make docker-health-codearena`. Check `make docker-logs-admin-codearena` / `make docker-logs-client-codearena`.
+Wait for the healthcheck `start_period`, then rerun `make docker-health-codearena`. Check `make docker-logs-frontend-codearena`.
 
 **Nginx restarting with `host not found in upstream`**  
-Admin/client are not running. Bring the full stack up with `make docker-up-codearena`.
+Frontend is not running. Bring the full stack up with `make docker-up-codearena`.
 
 **Compose credential helper / `docker-credential-desktop.exe` exec format error**  
 This is a Docker Desktop / WSL credential helper environment issue, not a CodeArena Dockerfile problem. Fix Docker Desktop WSL integration or credential helper configuration; do not rewrite CodeArena Dockerfiles as a workaround.
@@ -341,7 +348,7 @@ No contest, submission, Judge0, or notification domain work. No new database tab
 HTTP behavior from Milestone 4 is unchanged:
 
 - Existing `POST /api/auth/register`, `POST /api/auth/login`, and `GET /api/auth/me` are unchanged
-- Public registration still always creates `STUDENT`; ADMIN accounts remain test/repository fixtures only
+- Public registration still always creates `STUDENT`. A fresh database also seeds one default ADMIN via migration `003` (`admin@codearena.com` / `Admin@123`). The seed is idempotent and does not overwrite an existing account. Change this password before any non-local deployment. There is still no public ADMIN registration endpoint.
 - There is **no** separate `POST /api/admin/login` or `POST /api/student/login` — both apps use `/api/auth/login`
 - There is **no** `GET /api/app/me` — `GET /api/auth/me` already returns the authenticated identity `{ id, email, role }`
 - `GET /api/admin/me` and `GET /api/admin/dashboard` require Bearer JWT + `ADMIN`
@@ -393,7 +400,7 @@ Do not use `localhost` for container-to-container access; the api service must u
 
 ### Migrations
 
-Migrations live in `services/api/src/migrations/` and run automatically when the API process starts. They are versioned, checksummed, and recorded in `schema_migrations`. Re-running them is a no-op for already-applied versions. Never edit an already-applied migration; add a new file instead.
+Migrations live in `services/api/src/migrations/` and run automatically when the API process starts. They are versioned, checksummed, and recorded in `schema_migrations`. Re-running them is a no-op for already-applied versions. Never edit an already-applied migration; add a new file instead. Migration `003` seeds one default ADMIN (`admin@codearena.com`) when that email is not already present; it does not add tables.
 
 ```bash
 make db-migrate-codearena
@@ -426,7 +433,7 @@ Register/login body: `{ "email": "...", "password": "..." }`. Password minimum l
 
 Send `Authorization: Bearer <token>` from `POST /api/auth/login`. Do not send a client-chosen role.
 
-Frontend login UI, password reset, MFA, OAuth, refresh tokens, session cookies, contests, problems, and submissions are **not** part of Milestone 4.
+- Frontend login UI is served at `http://localhost:8080`. Contest/problem/submission screens remain mock until later milestones.
 
 ### Test commands
 
@@ -446,4 +453,3 @@ Planned next (see `MileStone-doc.md`):
 
 - Milestone 7: Judge0 adapter behind the Worker job processor
 - Contests, submissions, WebSockets, and retry/replay remain later milestones
-- Frontend integration of the Admin/Participant APIs (separate track)

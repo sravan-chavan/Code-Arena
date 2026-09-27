@@ -15,4 +15,4 @@ ADMIN_URL       := $(NGINX_URL)/admin
 CLIENT_URL      := $(NGINX_URL)/client
 
 # Services managed by this Compose stack
-SERVICES        := nginx admin client api worker postgres rabbitmq
+SERVICES        := nginx frontend api worker postgres rabbitmq
