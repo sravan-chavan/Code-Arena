@@ -18,6 +18,7 @@ const { decideAcknowledgement } = require('../src/messaging/consumer');
 const { publish } = require('../src/messaging/producer');
 const { connectWithRetry } = require('../src/messaging/connection');
 const { handleSystemTest } = require('../src/messaging/handlers/system-test.handler');
+const { configureMessagingIdentity, getMessagingIdentity } = require('@codearena/messaging');
 
 describe('RabbitMQ configuration', () => {
   it('assembles an AMQP URL from Compose-style variables and keeps secrets out of the log description', () => {
@@ -37,7 +38,10 @@ describe('RabbitMQ configuration', () => {
     assert.equal(config.deadLetterExchangeType, 'direct');
     assert.equal(config.systemQueue, 'codearena.system');
     assert.equal(config.systemDeadQueue, 'codearena.system.dlq');
+    assert.equal(config.executionQueue, 'codearena.execution');
+    assert.equal(config.executionDeadQueue, 'codearena.execution.dlq');
     assert.equal(config.routingKey, MESSAGE_TYPES.SYSTEM_TEST);
+    assert.equal(config.executionRoutingKey, MESSAGE_TYPES.EXECUTION_REQUESTED);
     assert.equal(config.consumerEnabled, true);
 
     const described = describeRabbitmqEndpoint(config);
@@ -85,8 +89,19 @@ describe('RabbitMQ configuration', () => {
   });
 });
 
+describe('Messaging service identity', () => {
+  it('makes log prefix and appId configurable per service', () => {
+    configureMessagingIdentity({ serviceName: 'worker' });
+    assert.equal(getMessagingIdentity().serviceName, 'worker');
+    assert.equal(getMessagingIdentity().appId, 'codearena-worker');
+    assert.equal(getMessagingIdentity().logPrefix, 'WORKER');
+    configureMessagingIdentity({ serviceName: 'api' });
+    assert.equal(getMessagingIdentity().appId, 'codearena-api');
+  });
+});
+
 describe('RabbitMQ topology plan', () => {
-  it('declares a topic exchange, a direct DLX, one durable queue, and a DLQ', () => {
+  it('declares topic exchange, DLX, system+execution queues, and DLQs', () => {
     const config = loadRabbitmqConfig({
       RABBITMQ_USER: 'codearena',
       RABBITMQ_PASSWORD: 'secret',
@@ -100,6 +115,7 @@ describe('RabbitMQ topology plan', () => {
         { name: 'codearena.events.dlx', type: 'direct' },
       ],
     );
+    assert.equal(plan.queues.length, 4);
     assert.equal(plan.queues[0].options.durable, true);
     assert.equal(
       plan.queues[0].options.arguments['x-dead-letter-exchange'],
@@ -110,8 +126,12 @@ describe('RabbitMQ topology plan', () => {
       'codearena.system.test.dead',
     );
     assert.equal(plan.queues[1].name, 'codearena.system.dlq');
-    assert.equal(plan.queues[1].options.durable, true);
-    assert.equal(plan.queues[1].options.arguments, undefined);
+    assert.equal(plan.queues[2].name, 'codearena.execution');
+    assert.equal(
+      plan.queues[2].options.arguments['x-dead-letter-routing-key'],
+      'codearena.execution.requested.dead',
+    );
+    assert.equal(plan.queues[3].name, 'codearena.execution.dlq');
     assert.deepEqual(plan.bindings, [
       {
         queue: 'codearena.system',
@@ -122,6 +142,16 @@ describe('RabbitMQ topology plan', () => {
         queue: 'codearena.system.dlq',
         exchange: 'codearena.events.dlx',
         routingKey: 'codearena.system.test.dead',
+      },
+      {
+        queue: 'codearena.execution',
+        exchange: 'codearena.events',
+        routingKey: 'codearena.execution.requested',
+      },
+      {
+        queue: 'codearena.execution.dlq',
+        exchange: 'codearena.events.dlx',
+        routingKey: 'codearena.execution.requested.dead',
       },
     ]);
   });
@@ -142,6 +172,14 @@ describe('Message contract', () => {
 
     const parsed = parseMessage(serializeMessage(message));
     assert.deepEqual(parsed, message);
+  });
+
+  it('accepts execution-requested messages in the shared contract', () => {
+    const message = createMessage({
+      type: MESSAGE_TYPES.EXECUTION_REQUESTED,
+      payload: { jobId: '00000000-0000-4000-8000-000000000099' },
+    });
+    assert.equal(message.type, 'codearena.execution.requested');
   });
 
   it('rejects unknown types, bad versions, and non-object payloads', () => {
@@ -171,7 +209,7 @@ describe('Message contract', () => {
 describe('Producer validation without a broker', () => {
   it('refuses an unknown type before it needs a connection', async () => {
     await assert.rejects(
-      () => publish({ type: 'codearena.execution.requested', payload: {} }),
+      () => publish({ type: 'codearena.contest.created', payload: {} }),
       (err) => err.code === 'MESSAGE_CONTRACT_INVALID',
     );
   });
@@ -179,6 +217,16 @@ describe('Producer validation without a broker', () => {
   it('refuses a valid message when the client is not connected', async () => {
     await assert.rejects(
       () => publish({ type: MESSAGE_TYPES.SYSTEM_TEST, payload: { note: 'offline' } }),
+      (err) => err.code === 'RABBITMQ_NOT_CONNECTED',
+    );
+  });
+
+  it('validates execution-requested envelopes without a connection', async () => {
+    await assert.rejects(
+      () => publish({
+        type: MESSAGE_TYPES.EXECUTION_REQUESTED,
+        payload: { jobId: '00000000-0000-4000-8000-000000000010' },
+      }),
       (err) => err.code === 'RABBITMQ_NOT_CONNECTED',
     );
   });

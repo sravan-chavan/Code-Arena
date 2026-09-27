@@ -107,9 +107,8 @@ function messageMatches(entry, messageId) {
   }
 }
 
-async function deadLetterFor(messageId) {
-  const config = loadRabbitmqConfig();
-  const entries = await peekQueue(config.systemDeadQueue);
+async function deadLetterFor(messageId, queueName) {
+  const entries = await peekQueue(queueName);
   return entries.find((entry) => messageMatches(entry, messageId)) || null;
 }
 
@@ -118,6 +117,8 @@ async function purgeApplicationQueues() {
   const channel = getPublishChannel();
   await channel.purgeQueue(config.systemQueue);
   await channel.purgeQueue(config.systemDeadQueue);
+  await channel.purgeQueue(config.executionQueue);
+  await channel.purgeQueue(config.executionDeadQueue);
 }
 
 async function declareProbeQueue() {
@@ -129,10 +130,26 @@ async function declareProbeQueue() {
     autoDelete: true,
     arguments: {
       'x-dead-letter-exchange': config.deadLetterExchange,
-      'x-dead-letter-routing-key': config.deadLetterRoutingKey,
+      'x-dead-letter-routing-key': config.systemDeadLetterRoutingKey,
     },
   });
-  await channel.bindQueue(asserted.queue, config.exchange, config.routingKey);
+  await channel.bindQueue(asserted.queue, config.exchange, config.systemRoutingKey);
+  return asserted.queue;
+}
+
+async function declareExecutionProbeQueue() {
+  const config = loadRabbitmqConfig();
+  const channel = getPublishChannel();
+  const asserted = await channel.assertQueue('', {
+    exclusive: true,
+    durable: false,
+    autoDelete: true,
+    arguments: {
+      'x-dead-letter-exchange': config.deadLetterExchange,
+      'x-dead-letter-routing-key': config.executionDeadLetterRoutingKey,
+    },
+  });
+  await channel.bindQueue(asserted.queue, config.exchange, config.executionRoutingKey);
   return asserted.queue;
 }
 
@@ -172,17 +189,26 @@ describe('RabbitMQ integration', () => {
     assert.equal(typeof channel.waitForConfirms, 'function');
   });
 
-  it('declares the exchange, queue, binding, DLX, and DLQ', async () => {
+  it('declares the exchange, system+execution queues, bindings, DLX, and DLQs', async () => {
     const config = loadRabbitmqConfig();
     const exchange = await management(`/api/exchanges/%2F/${encodeURIComponent(config.exchange)}`);
     const dlx = await management(`/api/exchanges/%2F/${encodeURIComponent(config.deadLetterExchange)}`);
     const queue = await management(`/api/queues/%2F/${encodeURIComponent(config.systemQueue)}`);
     const dlq = await management(`/api/queues/%2F/${encodeURIComponent(config.systemDeadQueue)}`);
+    const executionQueue = await management(
+      `/api/queues/%2F/${encodeURIComponent(config.executionQueue)}`,
+    );
+    const executionDlq = await management(
+      `/api/queues/%2F/${encodeURIComponent(config.executionDeadQueue)}`,
+    );
     const queueBindings = await management(
       `/api/bindings/%2F/e/${encodeURIComponent(config.exchange)}/q/${encodeURIComponent(config.systemQueue)}`,
     );
     const dlqBindings = await management(
       `/api/bindings/%2F/e/${encodeURIComponent(config.deadLetterExchange)}/q/${encodeURIComponent(config.systemDeadQueue)}`,
+    );
+    const executionBindings = await management(
+      `/api/bindings/%2F/e/${encodeURIComponent(config.exchange)}/q/${encodeURIComponent(config.executionQueue)}`,
     );
 
     assert.equal(exchange.type, 'topic');
@@ -191,11 +217,20 @@ describe('RabbitMQ integration', () => {
     assert.equal(dlx.durable, true);
     assert.equal(queue.durable, true);
     assert.equal(queue.arguments['x-dead-letter-exchange'], config.deadLetterExchange);
-    assert.equal(queue.arguments['x-dead-letter-routing-key'], config.deadLetterRoutingKey);
+    assert.equal(queue.arguments['x-dead-letter-routing-key'], config.systemDeadLetterRoutingKey);
     assert.equal(dlq.durable, true);
     assert.equal(dlq.arguments['x-dead-letter-exchange'], undefined);
-    assert.ok(queueBindings.some((binding) => binding.routing_key === config.routingKey));
-    assert.ok(dlqBindings.some((binding) => binding.routing_key === config.deadLetterRoutingKey));
+    assert.equal(executionQueue.durable, true);
+    assert.equal(
+      executionQueue.arguments['x-dead-letter-routing-key'],
+      config.executionDeadLetterRoutingKey,
+    );
+    assert.equal(executionDlq.durable, true);
+    assert.ok(queueBindings.some((binding) => binding.routing_key === config.systemRoutingKey));
+    assert.ok(dlqBindings.some((binding) => binding.routing_key === config.systemDeadLetterRoutingKey));
+    assert.ok(
+      executionBindings.some((binding) => binding.routing_key === config.executionRoutingKey),
+    );
   });
 
   it('publishes a contract envelope and the consumer acks it', async () => {
@@ -222,7 +257,7 @@ describe('RabbitMQ integration', () => {
         const status = await getPublishChannel().checkQueue(probeQueue);
         return status.messageCount === 0;
       });
-      assert.equal(await deadLetterFor(published.messageId), null);
+      assert.equal(await deadLetterFor(published.messageId, loadRabbitmqConfig().systemDeadQueue), null);
     } finally {
       await cancelConsumer(subscription.consumerTag);
       await getPublishChannel().deleteQueue(probeQueue).catch(() => {});
@@ -241,7 +276,7 @@ describe('RabbitMQ integration', () => {
         payload: { disposition: 'fail', probe: 'dlq' },
       });
 
-      const dead = await waitFor(() => deadLetterFor(published.messageId));
+      const dead = await waitFor(() => deadLetterFor(published.messageId, config.systemDeadQueue));
       const deaths = dead.properties
         && dead.properties.headers
         && dead.properties.headers['x-death'];
@@ -281,7 +316,7 @@ describe('RabbitMQ integration', () => {
         );
       });
 
-      const dead = await waitFor(() => deadLetterFor(probeId));
+      const dead = await waitFor(() => deadLetterFor(probeId, config.systemDeadQueue));
       assert.equal(payloadText(dead), 'not-json');
       assert.equal(handlerCalled, false);
       const deaths = dead.properties.headers['x-death'];
@@ -293,10 +328,12 @@ describe('RabbitMQ integration', () => {
     }
   });
 
-  it('registers a live consumer on the system queue', async () => {
+  it('registers a live consumer on the system queue (infrastructure probe only)', async () => {
+    process.env.RABBITMQ_CONSUMER_ENABLED = 'true';
     const config = loadRabbitmqConfig();
     const subscription = await startSystemConsumer();
-    const consumers = await waitFor(async () => {
+    assert.ok(subscription);
+    const registered = await waitFor(async () => {
       const listed = await management('/api/consumers');
       if (!Array.isArray(listed)) {
         return null;
@@ -304,8 +341,33 @@ describe('RabbitMQ integration', () => {
       const match = listed.find((consumer) => consumer.consumer_tag === subscription.consumerTag);
       return match || null;
     }, 15000);
-    assert.equal(consumers.queue.name, config.systemQueue);
-    const queue = await management(`/api/queues/%2F/${encodeURIComponent(config.systemQueue)}`);
-    assert.ok(queue.consumers >= 1);
+    assert.equal(registered.consumer_tag, subscription.consumerTag);
+    assert.equal(registered.queue.name, config.systemQueue);
+  });
+
+  it('publishes an execution job that routes to a bound execution consumer', async () => {
+    // Use an exclusive probe queue so this test does not race the Compose Worker
+    // on codearena.execution. Topic exchange delivers a copy to every bound queue.
+    const probeQueue = await declareExecutionProbeQueue();
+    /** @type {any} */
+    let received = null;
+    const subscription = await consume(probeQueue, async (message) => {
+      received = message;
+    });
+
+    try {
+      const published = await publish({
+        type: MESSAGE_TYPES.EXECUTION_REQUESTED,
+        payload: { jobId: '00000000-0000-4000-8000-000000000077' },
+      });
+
+      await waitFor(() => received && received.messageId === published.messageId);
+      assert.equal(received.type, MESSAGE_TYPES.EXECUTION_REQUESTED);
+      assert.equal(received.payload.jobId, '00000000-0000-4000-8000-000000000077');
+    } finally {
+      await cancelConsumer(subscription.consumerTag);
+      await getPublishChannel().deleteQueue(probeQueue).catch(() => {});
+      await purgeApplicationQueues();
+    }
   });
 });
