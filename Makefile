@@ -7,7 +7,7 @@ include common.mk
 	docker-restart-codearena docker-ps-codearena docker-health-codearena \
 	docker-logs-codearena docker-clean-codearena \
 	docker-logs-api-codearena docker-logs-worker-codearena \
-	docker-logs-admin-codearena docker-logs-client-codearena \
+	docker-logs-frontend-codearena \
 	test test-codearena db-test-codearena db-migrate-codearena \
 	lint format
 
@@ -37,7 +37,7 @@ docker-build-codearena: ensure-env ## Build CodeArena Docker images
 	$(COMPOSE) build
 
 docker-up-codearena: ensure-env ## Start the CodeArena stack
-	$(COMPOSE) up -d
+	$(COMPOSE) up -d --remove-orphans
 
 docker-down-codearena: ## Stop the CodeArena stack
 	$(COMPOSE) down
@@ -60,11 +60,8 @@ docker-logs-api-codearena: ## Follow CodeArena API logs
 docker-logs-worker-codearena: ## Follow CodeArena worker logs
 	$(COMPOSE) logs -f worker
 
-docker-logs-admin-codearena: ## Follow CodeArena admin logs
-	$(COMPOSE) logs -f admin
-
-docker-logs-client-codearena: ## Follow CodeArena client logs
-	$(COMPOSE) logs -f client
+docker-logs-frontend-codearena: ## Follow CodeArena frontend logs
+	$(COMPOSE) logs -f frontend
 
 docker-clean-codearena: ## Stop CodeArena and remove Compose orphans (keeps named volumes)
 	$(COMPOSE) down --remove-orphans
