@@ -1,34 +1,38 @@
-const http = require('http');
-
-const port = Number(process.env.PORT || 4001);
-
 /**
- * Milestone 0 worker skeleton.
- * Milestone 5 keeps this process health-only. RabbitMQ connect, topology,
- * publish, and the architecture consumer live in the API process.
- * This process does not consume queues, call Judge0, or execute user code.
+ * CodeArena Worker service entrypoint (Milestone 6).
+ *
+ * Owns RabbitMQ execution consumption, job processing boundary, lifecycle,
+ * and graceful shutdown. Does not call Judge0 or execute user code.
  */
-const server = http.createServer((req, res) => {
-  if (req.url === '/health' && req.method === 'GET') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(
-      JSON.stringify({
-        status: 'ok',
-        service: 'worker',
-        milestone: 0,
-      }),
-    );
-    return;
+
+const { createWorker } = require('./lifecycle');
+const { loadRabbitmqConfig } = require('@codearena/messaging');
+
+async function main() {
+  // Worker enables reconnect by default unless explicitly disabled.
+  if (process.env.RABBITMQ_RECONNECT_ENABLED === undefined) {
+    process.env.RABBITMQ_RECONNECT_ENABLED = 'true';
+  }
+  if (process.env.CODEARENA_SERVICE_NAME === undefined) {
+    process.env.CODEARENA_SERVICE_NAME = 'worker';
   }
 
-  res.writeHead(404, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ error: 'not_found' }));
-});
+  const worker = createWorker();
+  worker.setupSignalHandlers();
 
-server.listen(port, '0.0.0.0', () => {
-  console.log(`CodeArena worker health server listening on port ${port}`);
-});
+  process.on('unhandledRejection', (reason) => {
+    const message = reason && reason.message ? reason.message : String(reason);
+    console.error(`[WORKER] Unhandled rejection: ${message}`);
+  });
 
-process.on('SIGTERM', () => {
-  server.close(() => process.exit(0));
+  await worker.start();
+  const rabbit = loadRabbitmqConfig();
+  console.log(
+    `[WORKER] Ready queue=${rabbit.executionQueue} prefetch=${rabbit.prefetch} reconnect=${rabbit.reconnectEnabled}`,
+  );
+}
+
+main().catch((err) => {
+  console.error(`[WORKER] Failed to start: ${err && err.message ? err.message : err}`);
+  process.exit(1);
 });

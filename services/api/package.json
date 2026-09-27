@@ -12,7 +12,7 @@
     "migrate": "node src/db/migrate.js"
   },
   "dependencies": {
-    "amqplib": "^0.10.9",
+    "@codearena/messaging": "file:../../packages/messaging",
     "bcrypt": "^6.0.0",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.3",

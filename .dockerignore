@@ -1,0 +1,23 @@
+# Repository-root Docker build context (API + Worker images).
+.git
+.cursor
+**/node_modules
+**/.env
+**/.env.*
+**/npm-debug.log*
+apps
+infrastructure
+scripts
+tools
+packages/shared
+packages/types
+packages/config
+MileStone-doc.md
+README.md
+Makefile
+common.mk
+*.md
+services/api/tests
+services/api/scripts
+services/worker/tests
+services/worker/scripts

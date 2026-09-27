@@ -1,0 +1,13 @@
+{
+  "name": "@codearena/messaging",
+  "version": "0.1.0",
+  "private": true,
+  "main": "src/index.js",
+  "description": "Shared RabbitMQ messaging infrastructure for CodeArena API and Worker",
+  "dependencies": {
+    "amqplib": "^0.10.9"
+  },
+  "engines": {
+    "node": ">=24 <25"
+  }
+}

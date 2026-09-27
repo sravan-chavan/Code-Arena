@@ -69,14 +69,26 @@ docker-logs-client-codearena: ## Follow CodeArena client logs
 docker-clean-codearena: ## Stop CodeArena and remove Compose orphans (keeps named volumes)
 	$(COMPOSE) down --remove-orphans
 
-test: ## Run API unit tests (no PostgreSQL required)
+test: ## Run API + Worker unit tests (no PostgreSQL/RabbitMQ required)
 	@cd services/api && npm test
+	@cd services/worker && npm test
 
-test-codearena: ## Run API unit + PostgreSQL + RabbitMQ integration tests
+test-codearena: ## Run API + Worker unit + PostgreSQL + RabbitMQ integration tests
 	@cd services/api && npm run test:all
+	@cd services/worker && npm test
+	@echo "Stopping Compose Worker so host-side Worker tests own codearena.execution"
+	@$(COMPOSE) stop worker
+	@cd services/worker && npm run test:db; status=$$?; \
+		$(COMPOSE) start worker; \
+		exit $$status
 
 db-test-codearena: ## Run PostgreSQL and RabbitMQ integration tests (requires the CodeArena stack)
 	@cd services/api && npm run test:db
+	@echo "Stopping Compose Worker so host-side Worker tests own codearena.execution"
+	@$(COMPOSE) stop worker
+	@cd services/worker && npm run test:db; status=$$?; \
+		$(COMPOSE) start worker; \
+		exit $$status
 
 db-migrate-codearena: ensure-env ## Apply pending API migrations in the running api container
 	$(COMPOSE) exec api node src/db/migrate.js
