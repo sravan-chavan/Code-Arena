@@ -1,6 +1,6 @@
 # CodeArena
 
-CodeArena is a Dockerized coding contest platform. Milestone 0 established the infrastructure skeleton. Milestone 1 built the Express API foundation. Milestone 2 added the PostgreSQL database foundation. Milestone 3 added authentication and RBAC. Milestone 4 added Admin and Participant application API contracts. **Milestone 5** adds the RabbitMQ messaging architecture (connection, topic exchange, system queue, producer, consumer, and dead-letter foundation). It does not execute code or process contest jobs. Frontend UI remains a separate track.
+CodeArena is a Dockerized coding contest platform. Milestone 0 established the infrastructure skeleton. Milestone 1 built the Express API foundation. Milestone 2 added the PostgreSQL database foundation. Milestone 3 added authentication and RBAC. Milestone 4 added Admin and Participant application API contracts. Milestone 5 added the RabbitMQ messaging architecture. **Milestone 6** turns the Worker into a real background consumer of the execution queue, extracts shared messaging into `packages/messaging`, and keeps the API as the job publisher. It does not call Judge0 or execute user code. Frontend UI remains a separate track.
 
 ## Architecture overview
 
@@ -26,7 +26,7 @@ Milestone 0 establishes the service boundaries only:
 
 - **Admin** and **Client** are separate Next.js applications.
 - **API** is a separate Express.js service (does not execute user code).
-- **Worker** is a separate Node.js service (will later consume RabbitMQ and call Judge0).
+- **Worker** is a separate Node.js service that consumes RabbitMQ execution jobs (Judge0 arrives in M7).
 - **PostgreSQL** and **RabbitMQ** provide approved infrastructure.
 - **Nginx** is the local HTTP entry point.
 - **Judge0** is deferred (directory present; Compose service commented out).
@@ -43,7 +43,7 @@ Browser
 
 postgres (volume: codearena_postgres_data)
 rabbitmq + management UI
-worker (health-only skeleton)
+worker (RabbitMQ execution consumer)
 ```
 
 All Compose operations use project name `codearena`:
@@ -63,8 +63,9 @@ CodeArena/
 │   └── client/         Next.js participant application
 ├── services/
 │   ├── api/            Express.js backend
-│   └── worker/         Node.js worker skeleton
+│   └── worker/         Node.js Worker (execution consumer)
 ├── packages/
+│   ├── messaging/      Shared RabbitMQ messaging (API + Worker)
 │   ├── shared/         Shared utilities placeholder
 │   ├── types/          Shared constants placeholder
 │   └── config/         Shared config placeholder
@@ -137,9 +138,11 @@ Key variables:
 | `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | API client connection (Compose sets `DB_HOST=postgres` inside the api container) |
 | `DB_POOL_MIN` / `DB_POOL_MAX` / `DB_IDLE_TIMEOUT_MS` / `DB_CONNECTION_TIMEOUT_MS` | API connection pool |
 | `JWT_SECRET` / `JWT_EXPIRES_IN` | API JWT signing (required; never commit a real secret) |
-| `RABBITMQ_HOST` / `RABBITMQ_PORT` / `RABBITMQ_USER` / `RABBITMQ_PASSWORD` / `RABBITMQ_VHOST` | Broker connection. Compose sets `RABBITMQ_HOST=rabbitmq` for the API container |
+| `RABBITMQ_HOST` / `RABBITMQ_PORT` / `RABBITMQ_USER` / `RABBITMQ_PASSWORD` / `RABBITMQ_VHOST` | Broker connection. Compose sets `RABBITMQ_HOST=rabbitmq` for api and worker |
 | `RABBITMQ_URL` | Optional AMQP URL override. Leave unset to use the variables above |
-| `RABBITMQ_CONSUMER_ENABLED` | When `true` (default), the API process consumes `codearena.system` |
+| `RABBITMQ_CONSUMER_ENABLED` | Worker: when `true` (default), consume `codearena.execution`. API Compose sets this `false` (producer-only) |
+| `RABBITMQ_RECONNECT_ENABLED` | Worker runtime reconnect. Compose enables it for worker |
+| `CODEARENA_SERVICE_NAME` | Messaging log prefix / AMQP `appId` (`api` or `worker`) |
 | `API_PORT` / `ADMIN_PORT` / `CLIENT_PORT` / `WORKER_PORT` | Host port bindings |
 | `NGINX_PORT` | Local entry port (default `8080`) |
 
@@ -192,8 +195,8 @@ Docker lifecycle targets are explicitly namespaced so they cannot be confused wi
 | `make docker-logs-client-codearena` | Follow client logs |
 | `make docker-health-codearena` | Check HTTP and container health (read-only) |
 | `make docker-clean-codearena` | Stop stack and remove orphans |
-| `make test` | Run API unit tests (no PostgreSQL or RabbitMQ required) |
-| `make test-codearena` | Run API unit + PostgreSQL + RabbitMQ integration tests |
+| `make test` | Run API + Worker unit tests (no PostgreSQL or RabbitMQ required) |
+| `make test-codearena` | Run API + Worker unit + PostgreSQL + RabbitMQ integration tests |
 | `make db-test-codearena` | Run PostgreSQL and RabbitMQ integration tests |
 | `make db-migrate-codearena` | Apply pending API migrations in the api container |
 | `make lint` | Placeholder |
@@ -273,10 +276,10 @@ make docker-down-codearena
 | `nginx` | Reverse proxy entry | Routes `/api`, `/admin`, `/client`; `/ws` stub |
 | `admin` | Admin Next.js app | Landing + `/admin/health` |
 | `client` | Participant Next.js app | Landing + `/client/health` |
-| `api` | Express backend | M5: health, DB, auth, admin/student APIs, RabbitMQ publisher and architecture consumer |
-| `worker` | Worker process | Health HTTP server only. Does not consume RabbitMQ yet |
+| `api` | Express backend | M6: health, DB, auth, admin/student APIs, RabbitMQ **producer** (no execution consumer) |
+| `worker` | Worker process | M6: consumes `codearena.execution`, job processor boundary, graceful shutdown, reconnect |
 | `postgres` | Database | Application database; API-owned migrations |
-| `rabbitmq` | Message broker | API declares `codearena.events`, `codearena.system`, and the dead-letter pair on startup |
+| `rabbitmq` | Message broker | Shared topology: events exchange, system + execution queues, DLX/DLQs |
 | `judge0` | Execution engine | Deferred / commented out |
 
 ## Troubleshooting
@@ -327,11 +330,13 @@ From the CodeArena guardrails skill:
 
 ## Current milestone
 
-**Milestone 5 — RabbitMQ architecture**
+**Milestone 6 — Worker service**
 
-The API connects to RabbitMQ during startup, after migrations and before it listens for HTTP. It declares a durable topic exchange `codearena.events`, a durable queue `codearena.system` bound to `codearena.system.test`, a direct dead-letter exchange `codearena.events.dlx`, and a durable queue `codearena.system.dlq`. Publishers call `publish({ type, payload })` in `services/api/src/messaging`. The API process runs one architecture consumer (`handleSystemTest`) so acknowledgement and dead-letter behavior are real. The worker process is still health-only.
+Shared messaging lives in `packages/messaging` and is used by both API and Worker. The API connects to RabbitMQ as a **producer**, asserts topology (system + execution queues and DLQs), and does **not** consume the execution queue. The Worker connects, asserts the same topology, consumes `codearena.execution` bound to `codearena.execution.requested`, validates the M5 envelope plus the M6 execution payload (`jobId` required), runs the job processor boundary, and ACK/rejects (DLQ) according to the shared consumer. Worker runtime reconnect uses bounded exponential backoff. Judge0 is not implemented.
 
-No contest, submission, Judge0, or notification messages exist. No new HTTP routes and no new database tables were added for messaging.
+Message type added in M6: `codearena.execution.requested`. System probe type `codearena.system.test` remains for infrastructure tests only.
+
+No contest, submission, Judge0, or notification domain work. No new database tables.
 
 HTTP behavior from Milestone 4 is unchanged:
 
@@ -375,12 +380,14 @@ Copy `.env.example` to `.env` (never commit `.env`). The API reads:
 | `DB_CONNECTION_TIMEOUT_MS` | `2000` | |
 | `JWT_SECRET` | required | At least 32 characters; do not use the example placeholder in production |
 | `JWT_EXPIRES_IN` | `1h` | Passed to `jsonwebtoken` (for example `1h`, `8h`) |
-| `RABBITMQ_HOST` | `localhost` | Compose overrides to `rabbitmq` inside the API container |
+| `RABBITMQ_HOST` | `localhost` | Compose overrides to `rabbitmq` inside api and worker |
 | `RABBITMQ_PORT` | `5672` | AMQP port |
 | `RABBITMQ_USER` / `RABBITMQ_PASSWORD` | required unless `RABBITMQ_URL` is set | Same values as the RabbitMQ container |
 | `RABBITMQ_VHOST` | `/` | |
 | `RABBITMQ_URL` | unset | Optional override of the assembled AMQP URL |
-| `RABBITMQ_CONSUMER_ENABLED` | `true` | Set `false` to connect and declare topology without consuming |
+| `RABBITMQ_CONSUMER_ENABLED` | `true` | Worker consumption switch. API Compose sets `false` |
+| `RABBITMQ_RECONNECT_ENABLED` | `false` (host default) | Worker Compose sets `true` |
+| `CODEARENA_SERVICE_NAME` | `api` / `worker` | Messaging identity |
 
 Do not use `localhost` for container-to-container access; the api service must use the Compose hostname `postgres`.
 
@@ -424,12 +431,12 @@ Frontend login UI, password reset, MFA, OAuth, refresh tokens, session cookies, 
 ### Test commands
 
 ```bash
-make test                 # unit tests (no PostgreSQL, no RabbitMQ)
+make test                 # API + Worker unit tests (no PostgreSQL, no RabbitMQ)
 make db-test-codearena    # integration tests against PostgreSQL and RabbitMQ
 make test-codearena       # unit + integration
 ```
 
-Integration tests require the Compose `postgres` and `rabbitmq` services. They fail clearly if either is not available; they are not skipped. Messaging tests publish and consume against the real broker; they are not mock-only.
+Integration tests require the Compose `postgres` and `rabbitmq` services. They fail clearly if either is not available; they are not skipped. Messaging and Worker tests publish and consume against the real broker; they are not mock-only.
 
 See `MileStone-doc.md` for the full roadmap.
 
@@ -437,6 +444,6 @@ See `MileStone-doc.md` for the full roadmap.
 
 Planned next (see `MileStone-doc.md`):
 
-- Milestone 6: move consumption into the worker and add real job handling
-- Judge0, contests, submissions, WebSockets, and retry/replay remain later milestones
+- Milestone 7: Judge0 adapter behind the Worker job processor
+- Contests, submissions, WebSockets, and retry/replay remain later milestones
 - Frontend integration of the Admin/Participant APIs (separate track)

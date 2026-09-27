@@ -1,12 +1,15 @@
 const { createApp } = require('./app');
 const config = require('./config/environment');
 const { validateJwtConfig } = require('./config/jwt');
-const { loadRabbitmqConfig } = require('./config/rabbitmq');
+const {
+  initMessaging,
+  closeMessaging,
+  logMessagingError,
+} = require('./messaging');
+
 const { initPool, waitForDatabase, warmPool, closePool } = require('./db/pool');
 const { runMigrations } = require('./db/migrate');
 const { logDatabaseError } = require('./db/errors');
-const { logMessagingError } = require('./messaging/errors');
-const { initMessaging, closeMessaging, startSystemConsumer } = require('./messaging');
 
 let shuttingDown = false;
 
@@ -77,12 +80,10 @@ async function start() {
     `[API] Migrations: applied=${migrationResult.applied.length} skipped=${migrationResult.skipped.length}`,
   );
 
-  await initMessaging();
-  if (loadRabbitmqConfig().consumerEnabled) {
-    await startSystemConsumer();
-  } else {
-    console.log('[API] RabbitMQ consumer disabled by RABBITMQ_CONSUMER_ENABLED');
-  }
+  // M6: API is producer-only. Topology is asserted so publishers can route to
+  // the execution queue. Real consumption lives in services/worker.
+  await initMessaging({ serviceName: config.serviceName });
+  console.log('[API] RabbitMQ producer ready (execution consumption belongs to Worker)');
 
   const app = createApp();
   const server = app.listen(config.port, config.host, () => {
