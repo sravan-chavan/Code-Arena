@@ -4,178 +4,269 @@ import Card from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
 import Editor from '@/components/ui/Editor';
-import { questions, simulatePracticeRun } from '@/lib/mockData';
-import { Play, Code2, Terminal, CheckCircle, Clock } from 'lucide-react';
+import { formatDate } from '@/lib/mockData';
+import { fetchLanguages, formatStatus } from '@/lib/contestsApi';
+import {
+  createPracticeExecution,
+  fetchPracticeProblems,
+  fetchPracticeSubmissions,
+  pollPracticeSubmission,
+} from '@/lib/practiceApi';
+import { ApiError } from '@/lib/apiClient';
+import { Play, UploadCloud, Code2, Terminal, Clock } from 'lucide-react';
 
 export default function PracticeArea() {
-  const [selectedQuestion, setSelectedQuestion] = useState(questions[0]);
+  const [problems, setProblems] = useState([]);
+  const [languages, setLanguages] = useState([]);
+  const [submissions, setSubmissions] = useState([]);
+  const [selectedProblem, setSelectedProblem] = useState(null);
   const [language, setLanguage] = useState('python');
-  const [code, setCode] = useState('# Write your code here...\n');
+  const [code, setCode] = useState('');
   const [output, setOutput] = useState('');
   const [isExecuting, setIsExecuting] = useState(false);
-  const [activeTab, setActiveTab] = useState('problem'); // 'problem' or 'submissions'
-
-  // Boilerplate templates
-  const templates = {
-    python: 'def solve():\n    # Write your solution here\n    pass\n\nif __name__ == "__main__":\n    solve()',
-    javascript: 'function solve() {\n    // Write your solution here\n}\n\nsolve();',
-    cpp: '#include <iostream>\nusing namespace std;\n\nint main() {\n    // Write your solution here\n    return 0;\n}',
-    java: 'public class Main {\n    public static void main(String[] args) {\n        // Write your solution here\n    }\n}'
-  };
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submissionResult, setSubmissionResult] = useState(null);
+  const [activeTab, setActiveTab] = useState('problem');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (code === '# Write your code here...\n' || code === '') {
-      setCode(templates[language] || '');
-    }
-  }, [language]);
-
-  const handleRun = async () => {
-    setIsExecuting(true);
-    setOutput('Compiling and executing...');
-    
-    try {
-      const result = await simulatePracticeRun(code, language, selectedQuestion.sampleInput);
-      if (result.error) {
-        setOutput(`Error:\n${result.error}`);
-      } else {
-        setOutput(`Execution Successful (Time: ${result.runtime}ms)\n\nOutput:\n${result.output}`);
+    let cancelled = false;
+    (async () => {
+      try {
+        const [nextProblems, nextLanguages, nextSubmissions] = await Promise.all([
+          fetchPracticeProblems(),
+          fetchLanguages(),
+          fetchPracticeSubmissions(),
+        ]);
+        if (cancelled) return;
+        setProblems(nextProblems);
+        setLanguages(nextLanguages);
+        setSubmissions(nextSubmissions);
+        const firstProblem = nextProblems[0] || null;
+        setSelectedProblem(firstProblem);
+        const firstLanguage = nextLanguages.find((item) => item.slug === 'python') || nextLanguages[0];
+        if (firstLanguage) {
+          setLanguage(firstLanguage.slug);
+          setCode(firstLanguage.template || '');
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof ApiError ? err.message : 'Unable to load practice problems.');
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-    } catch (e) {
-      setOutput('An error occurred during execution.');
-    } finally {
-      setIsExecuting(false);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  function onLanguageChange(slug) {
+    setLanguage(slug);
+    const selected = languages.find((item) => item.slug === slug);
+    if (selected?.template) setCode(selected.template);
+  }
+
+  function selectProblem(problem) {
+    setSelectedProblem(problem);
+    setSubmissionResult(null);
+    setOutput('');
+    setActiveTab('problem');
+  }
+
+  async function refreshSubmissions() {
+    try {
+      setSubmissions(await fetchPracticeSubmissions());
+    } catch {
+      // Keep the last known list if the refresh fails; the run result is already shown.
     }
-  };
+  }
+
+  async function runKind(kind) {
+    if (!selectedProblem) return;
+    const running = kind === 'run' ? setIsExecuting : setIsSubmitting;
+    running(true);
+    setSubmissionResult(null);
+    setOutput(kind === 'run' ? 'Running sample test case…' : 'Submitting through RabbitMQ…');
+    try {
+      const created = await createPracticeExecution({
+        questionId: selectedProblem.id,
+        language,
+        sourceCode: code,
+        kind,
+      });
+      const result = await pollPracticeSubmission(created.id);
+      setSubmissionResult(result);
+      const lines = [
+        `Result: ${formatStatus(result.status)}`,
+        `Tests: ${result.testsPassed ?? 0} / ${result.testsTotal ?? 0}`,
+        result.executionTime ? `Time: ${result.executionTime}s` : null,
+        result.memoryKb ? `Memory: ${result.memoryKb} KB` : null,
+        result.stdout ? `\nstdout:\n${result.stdout}` : null,
+        result.stderr ? `\nstderr:\n${result.stderr}` : null,
+        result.compileOutput ? `\ncompile:\n${result.compileOutput}` : null,
+        result.message ? `\nmessage:\n${result.message}` : null,
+      ].filter(Boolean);
+      setOutput(lines.join('\n'));
+      await refreshSubmissions();
+    } catch (err) {
+      setOutput(err instanceof ApiError ? err.message : err.message || 'Execution failed.');
+      await refreshSubmissions();
+    } finally {
+      running(false);
+    }
+  }
+
+  if (error) {
+    return <div style={{ padding: 'var(--space-xl)', color: 'var(--accent-rose)' }}>{error}</div>;
+  }
+  if (loading) {
+    return <div style={{ padding: 'var(--space-xl)', textAlign: 'center', color: 'var(--accent-cyan)' }}>Loading Practice Area…</div>;
+  }
+  if (!selectedProblem) {
+    return <div style={{ padding: 'var(--space-xl)', color: 'var(--text-secondary)' }}>No practice problems are available yet.</div>;
+  }
+
+  const busy = isExecuting || isSubmitting || !code.trim();
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-lg)', height: 'calc(100vh - 120px)' }}>
-      {/* Left Pane - Problem Description */}
       <Card className="flex flex-col h-full overflow-hidden" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ display: 'flex', borderBottom: '1px solid var(--border-default)', marginBottom: 'var(--space-md)' }}>
-          <button 
+          <button
+            type="button"
             style={{ padding: '12px 24px', fontWeight: 600, borderBottom: activeTab === 'problem' ? '2px solid var(--accent-cyan)' : '2px solid transparent', color: activeTab === 'problem' ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}
             onClick={() => setActiveTab('problem')}
           >
-            Problem Description
+            Problem
           </button>
-          <button 
+          <button
+            type="button"
+            style={{ padding: '12px 24px', fontWeight: 600, borderBottom: activeTab === 'list' ? '2px solid var(--accent-cyan)' : '2px solid transparent', color: activeTab === 'list' ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}
+            onClick={() => setActiveTab('list')}
+          >
+            Problem List
+          </button>
+          <button
+            type="button"
             style={{ padding: '12px 24px', fontWeight: 600, borderBottom: activeTab === 'submissions' ? '2px solid var(--accent-cyan)' : '2px solid transparent', color: activeTab === 'submissions' ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}
             onClick={() => setActiveTab('submissions')}
           >
-            Problem List
+            My Submissions
           </button>
         </div>
 
         {activeTab === 'problem' ? (
           <div style={{ overflowY: 'auto', flex: 1, paddingRight: 'var(--space-sm)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--space-md)' }}>
-              <h2 style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--text-primary)' }}>{selectedQuestion.title}</h2>
-              <Badge status={selectedQuestion.difficulty} />
+              <h2 style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--text-primary)' }}>{selectedProblem.title}</h2>
+              <Badge status={selectedProblem.difficulty} />
             </div>
-
             <div style={{ display: 'flex', gap: 'var(--space-md)', marginBottom: 'var(--space-lg)', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Clock size={14} /> {selectedQuestion.timeLimit}s</span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><ServerIcon size={14} /> {selectedQuestion.memoryLimit}MB</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Clock size={14} /> {selectedProblem.timeLimitSeconds}s</span>
+              <span>{selectedProblem.memoryLimitMb}MB</span>
             </div>
-
-            <div style={{ marginBottom: 'var(--space-lg)', color: 'var(--text-primary)', whiteSpace: 'pre-line' }}>
-              {selectedQuestion.description}
-            </div>
-
+            <div style={{ marginBottom: 'var(--space-lg)', color: 'var(--text-primary)', whiteSpace: 'pre-line' }}>{selectedProblem.description}</div>
             <div style={{ marginBottom: 'var(--space-lg)' }}>
-              <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: 'var(--space-sm)', color: 'var(--text-primary)' }}>Input Format</h3>
-              <p style={{ color: 'var(--text-secondary)', whiteSpace: 'pre-line' }}>{selectedQuestion.inputFormat}</p>
+              <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: 'var(--space-sm)' }}>Input Format</h3>
+              <p style={{ color: 'var(--text-secondary)', whiteSpace: 'pre-line' }}>{selectedProblem.inputFormat}</p>
             </div>
-
             <div style={{ marginBottom: 'var(--space-lg)' }}>
-              <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: 'var(--space-sm)', color: 'var(--text-primary)' }}>Output Format</h3>
-              <p style={{ color: 'var(--text-secondary)', whiteSpace: 'pre-line' }}>{selectedQuestion.outputFormat}</p>
+              <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: 'var(--space-sm)' }}>Output Format</h3>
+              <p style={{ color: 'var(--text-secondary)', whiteSpace: 'pre-line' }}>{selectedProblem.outputFormat}</p>
             </div>
-
             <div style={{ marginBottom: 'var(--space-xl)' }}>
-              <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: 'var(--space-sm)', color: 'var(--text-primary)' }}>Constraints</h3>
-              <div style={{ background: 'var(--bg-input)', padding: 'var(--space-md)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-code)', fontSize: '0.85rem', color: 'var(--accent-purple)' }}>
-                {selectedQuestion.constraints.split('\n').map((c, i) => <div key={i}>{c}</div>)}
-              </div>
+              <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: 'var(--space-sm)' }}>Constraints</h3>
+              <div style={{ background: 'var(--bg-input)', padding: 'var(--space-md)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-code)', fontSize: '0.85rem' }}>{selectedProblem.constraints}</div>
             </div>
-
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-md)' }}>
               <div>
                 <h4 style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: 'var(--space-xs)', color: 'var(--text-secondary)' }}>Sample Input</h4>
-                <div style={{ background: 'var(--bg-input)', padding: 'var(--space-md)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-code)', fontSize: '0.85rem', minHeight: '80px', whiteSpace: 'pre-wrap' }}>
-                  {selectedQuestion.sampleInput}
-                </div>
+                <div style={{ background: 'var(--bg-input)', padding: 'var(--space-md)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-code)', fontSize: '0.85rem', minHeight: '80px', whiteSpace: 'pre-wrap' }}>{selectedProblem.sampleInput || '(none)'}</div>
               </div>
               <div>
                 <h4 style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: 'var(--space-xs)', color: 'var(--text-secondary)' }}>Sample Output</h4>
-                <div style={{ background: 'var(--bg-input)', padding: 'var(--space-md)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-code)', fontSize: '0.85rem', minHeight: '80px', whiteSpace: 'pre-wrap' }}>
-                  {selectedQuestion.sampleOutput}
-                </div>
+                <div style={{ background: 'var(--bg-input)', padding: 'var(--space-md)', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-code)', fontSize: '0.85rem', minHeight: '80px', whiteSpace: 'pre-wrap' }}>{selectedProblem.sampleOutput}</div>
               </div>
             </div>
           </div>
-        ) : (
+        ) : null}
+
+        {activeTab === 'list' ? (
           <div style={{ overflowY: 'auto', flex: 1 }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-sm)' }}>
-              {questions.map(q => (
-                <div 
-                  key={q.id} 
-                  onClick={() => setSelectedQuestion(q)}
-                  style={{ 
-                    padding: 'var(--space-md)', 
-                    background: selectedQuestion.id === q.id ? 'var(--accent-cyan-dim)' : 'var(--bg-secondary)', 
-                    border: `1px solid ${selectedQuestion.id === q.id ? 'var(--accent-cyan)' : 'var(--border-default)'}`, 
+              {problems.map((problem) => (
+                <button
+                  type="button"
+                  key={problem.id}
+                  onClick={() => selectProblem(problem)}
+                  style={{
+                    padding: 'var(--space-md)',
+                    textAlign: 'left',
+                    background: selectedProblem.id === problem.id ? 'var(--accent-cyan-dim)' : 'var(--bg-secondary)',
+                    border: `1px solid ${selectedProblem.id === problem.id ? 'var(--accent-cyan)' : 'var(--border-default)'}`,
                     borderRadius: 'var(--radius-md)',
                     cursor: 'pointer',
-                    transition: 'all 0.2s'
                   }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div style={{ fontWeight: 600, color: selectedQuestion.id === q.id ? 'var(--accent-cyan)' : 'var(--text-primary)' }}>{q.title}</div>
-                    <Badge status={q.difficulty} />
+                    <div style={{ fontWeight: 600, color: selectedProblem.id === problem.id ? 'var(--accent-cyan)' : 'var(--text-primary)' }}>{problem.title}</div>
+                    <Badge status={problem.difficulty} />
                   </div>
-                  <div style={{ display: 'flex', gap: 'var(--space-sm)', marginTop: 'var(--space-sm)' }}>
-                    {q.tags.map(tag => (
-                      <span key={tag} style={{ fontSize: '0.7rem', padding: '2px 8px', background: 'var(--bg-input)', borderRadius: 'var(--radius-full)', color: 'var(--text-secondary)' }}>{tag}</span>
-                    ))}
-                  </div>
-                </div>
+                </button>
               ))}
             </div>
           </div>
-        )}
+        ) : null}
+
+        {activeTab === 'submissions' ? (
+          <div style={{ overflowY: 'auto', flex: 1 }}>
+            {submissions.length === 0 ? (
+              <p style={{ color: 'var(--text-secondary)' }}>No practice submissions yet.</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-sm)' }}>
+                {submissions.map((submission) => (
+                  <div key={submission.id} style={{ padding: 'var(--space-md)', background: 'var(--bg-secondary)', border: '1px solid var(--border-default)', borderRadius: 'var(--radius-md)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Badge status={submission.status} customLabel={formatStatus(submission.status)} />
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{formatDate(submission.createdAt)}</span>
+                    </div>
+                    <div style={{ marginTop: 'var(--space-sm)', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                      {submission.kind} · {submission.languageSlug} · {submission.testsPassed ?? 0}/{submission.testsTotal ?? 0}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : null}
       </Card>
 
-      {/* Right Pane - Editor */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)', height: '100%' }}>
         <Card style={{ flex: 3, display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 'var(--space-sm) var(--space-md)', borderBottom: '1px solid var(--border-default)', background: 'var(--bg-secondary)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-sm)' }}>
               <Code2 size={16} style={{ color: 'var(--text-secondary)' }} />
-              <select 
+              <select
                 className="form-select"
-                style={{ padding: '4px 28px 4px 12px', fontSize: '0.85rem', background: 'var(--bg-input)', border: '1px solid var(--border-default)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }}
                 value={language}
-                onChange={(e) => {
-                  setLanguage(e.target.value);
-                  setCode(templates[e.target.value]);
-                }}
+                onChange={(e) => onLanguageChange(e.target.value)}
+                style={{ padding: '4px 28px 4px 12px', fontSize: '0.85rem', background: 'var(--bg-input)', border: '1px solid var(--border-default)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }}
               >
-                <option value="python">Python 3</option>
-                <option value="cpp">C++ 17</option>
-                <option value="java">Java 11</option>
-                <option value="javascript">JavaScript (Node)</option>
+                {(languages.length ? languages : [{ slug: 'python', label: 'Python 3' }]).map((item) => (
+                  <option key={item.slug} value={item.slug}>{item.label}</option>
+                ))}
               </select>
             </div>
-            
             <div style={{ display: 'flex', gap: 'var(--space-sm)' }}>
-              <Button variant="secondary" className="btn-sm" onClick={() => setCode(templates[language])}>Reset</Button>
-              <Button variant="primary" className="btn-sm" onClick={handleRun} disabled={isExecuting}>
-                <Play size={14} style={{ marginRight: '4px' }} /> {isExecuting ? 'Running...' : 'Run Code'}
+              <Button variant="secondary" className="btn-sm" onClick={() => runKind('run')} disabled={busy}>
+                <Play size={14} style={{ marginRight: '4px' }} /> {isExecuting ? 'Running…' : 'Run'}
+              </Button>
+              <Button variant="success" className="btn-sm" onClick={() => runKind('submit')} disabled={busy}>
+                <UploadCloud size={14} style={{ marginRight: '4px' }} /> {isSubmitting ? 'Submitting…' : 'Submit'}
               </Button>
             </div>
           </div>
-          
           <div style={{ flex: 1, overflow: 'hidden', background: '#282c34' }}>
             <Editor value={code} onChange={setCode} language={language} />
           </div>
@@ -184,24 +275,18 @@ export default function PracticeArea() {
         <Card style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden', minHeight: '200px' }}>
           <div style={{ padding: 'var(--space-sm) var(--space-md)', borderBottom: '1px solid var(--border-default)', background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', gap: 'var(--space-sm)' }}>
             <Terminal size={16} style={{ color: 'var(--text-secondary)' }} />
-            <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>Terminal Output</span>
+            <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>Execution Result</span>
           </div>
-          <div style={{ flex: 1, padding: 'var(--space-md)', background: 'var(--bg-input)', overflowY: 'auto', fontFamily: 'var(--font-code)', fontSize: '0.85rem', color: output.includes('Error') ? 'var(--accent-rose)' : 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>
+          {submissionResult ? (
+            <div style={{ padding: 'var(--space-sm) var(--space-md)', fontSize: '0.85rem', fontWeight: 700 }}>
+              {formatStatus(submissionResult.status)}
+            </div>
+          ) : null}
+          <div style={{ flex: 1, padding: 'var(--space-md)', background: 'var(--bg-input)', overflowY: 'auto', fontFamily: 'var(--font-code)', fontSize: '0.85rem', color: output.toLowerCase().includes('error') || output.includes('Timed out') ? 'var(--accent-rose)' : 'var(--text-primary)', whiteSpace: 'pre-wrap' }}>
             {output || 'Output will appear here after execution...'}
           </div>
         </Card>
       </div>
     </div>
-  );
-}
-
-function ServerIcon({ size, className }) {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-      <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
-      <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
-      <line x1="6" y1="6" x2="6.01" y2="6"/>
-      <line x1="6" y1="18" x2="6.01" y2="18"/>
-    </svg>
   );
 }

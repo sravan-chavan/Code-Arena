@@ -33,11 +33,21 @@ describe('Migrations', () => {
     assert.ok(versions.includes('001'));
     assert.ok(versions.includes('002'));
     assert.ok(versions.includes('003'));
+    assert.ok(versions.includes('004'));
+    assert.ok(versions.includes('005'));
+    assert.ok(versions.includes('006'));
+    assert.ok(versions.includes('007'));
+    assert.ok(versions.includes('008'));
     const second = await runMigrations();
     assert.deepEqual(second.applied, []);
     assert.ok(second.skipped.includes('001'));
     assert.ok(second.skipped.includes('002'));
     assert.ok(second.skipped.includes('003'));
+    assert.ok(second.skipped.includes('004'));
+    assert.ok(second.skipped.includes('005'));
+    assert.ok(second.skipped.includes('006'));
+    assert.ok(second.skipped.includes('007'));
+    assert.ok(second.skipped.includes('008'));
 
     const afterSecond = await getAppliedMigrations();
     assert.equal(

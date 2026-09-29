@@ -115,7 +115,7 @@ describe('RabbitMQ topology plan', () => {
         { name: 'codearena.events.dlx', type: 'direct' },
       ],
     );
-    assert.equal(plan.queues.length, 4);
+    assert.equal(plan.queues.length, 6);
     assert.equal(plan.queues[0].options.durable, true);
     assert.equal(
       plan.queues[0].options.arguments['x-dead-letter-exchange'],
@@ -132,6 +132,8 @@ describe('RabbitMQ topology plan', () => {
       'codearena.execution.requested.dead',
     );
     assert.equal(plan.queues[3].name, 'codearena.execution.dlq');
+    assert.equal(plan.queues[4].name, 'codearena.execution.results');
+    assert.equal(plan.queues[5].name, 'codearena.execution.results.dlq');
     assert.deepEqual(plan.bindings, [
       {
         queue: 'codearena.system',
@@ -152,6 +154,16 @@ describe('RabbitMQ topology plan', () => {
         queue: 'codearena.execution.dlq',
         exchange: 'codearena.events.dlx',
         routingKey: 'codearena.execution.requested.dead',
+      },
+      {
+        queue: 'codearena.execution.results',
+        exchange: 'codearena.events',
+        routingKey: 'codearena.execution.completed',
+      },
+      {
+        queue: 'codearena.execution.results.dlq',
+        exchange: 'codearena.events.dlx',
+        routingKey: 'codearena.execution.completed.dead',
       },
     ]);
   });
@@ -180,6 +192,14 @@ describe('Message contract', () => {
       payload: { jobId: '00000000-0000-4000-8000-000000000099' },
     });
     assert.equal(message.type, 'codearena.execution.requested');
+  });
+
+  it('accepts execution-completed result messages in the shared contract', () => {
+    const message = createMessage({
+      type: MESSAGE_TYPES.EXECUTION_COMPLETED,
+      payload: { jobId: '00000000-0000-4000-8000-000000000098', status: 'ACCEPTED' },
+    });
+    assert.equal(message.type, 'codearena.execution.completed');
   });
 
   it('rejects unknown types, bad versions, and non-object payloads', () => {

@@ -119,6 +119,10 @@ async function purgeApplicationQueues() {
   await channel.purgeQueue(config.systemDeadQueue);
   await channel.purgeQueue(config.executionQueue);
   await channel.purgeQueue(config.executionDeadQueue);
+  if (config.executionResultQueue) {
+    await channel.purgeQueue(config.executionResultQueue).catch(() => {});
+    await channel.purgeQueue(config.executionResultDeadQueue).catch(() => {});
+  }
 }
 
 async function declareProbeQueue() {

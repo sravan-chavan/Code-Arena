@@ -6,6 +6,7 @@ const {
   closeMessaging,
   logMessagingError,
 } = require('./messaging');
+const { startExecutionResultsConsumer } = require('./messaging/results-consumer');
 
 const { initPool, waitForDatabase, warmPool, closePool } = require('./db/pool');
 const { runMigrations } = require('./db/migrate');
@@ -80,10 +81,12 @@ async function start() {
     `[API] Migrations: applied=${migrationResult.applied.length} skipped=${migrationResult.skipped.length}`,
   );
 
-  // M6: API is producer-only. Topology is asserted so publishers can route to
-  // the execution queue. Real consumption lives in services/worker.
+  // Topology is asserted so publishers can route to the execution queue.
+  // The Worker consumes execution requests. The API consumes execution results
+  // only so the UI can poll persisted Judge0 outcomes (no WebSockets).
   await initMessaging({ serviceName: config.serviceName });
-  console.log('[API] RabbitMQ producer ready (execution consumption belongs to Worker)');
+  await startExecutionResultsConsumer();
+  console.log('[API] RabbitMQ producer ready; execution consumption belongs to Worker');
 
   const app = createApp();
   const server = app.listen(config.port, config.host, () => {
