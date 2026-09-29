@@ -56,6 +56,20 @@ function buildTopologyPlan(config) {
         name: config.executionDeadQueue,
         options: Object.freeze({ durable: true }),
       }),
+      Object.freeze({
+        name: config.executionResultQueue,
+        options: Object.freeze({
+          durable: true,
+          arguments: Object.freeze({
+            'x-dead-letter-exchange': config.deadLetterExchange,
+            'x-dead-letter-routing-key': config.executionResultDeadLetterRoutingKey,
+          }),
+        }),
+      }),
+      Object.freeze({
+        name: config.executionResultDeadQueue,
+        options: Object.freeze({ durable: true }),
+      }),
     ]),
     bindings: Object.freeze([
       Object.freeze({
@@ -77,6 +91,16 @@ function buildTopologyPlan(config) {
         queue: config.executionDeadQueue,
         exchange: config.deadLetterExchange,
         routingKey: config.executionDeadLetterRoutingKey,
+      }),
+      Object.freeze({
+        queue: config.executionResultQueue,
+        exchange: config.exchange,
+        routingKey: config.executionResultRoutingKey,
+      }),
+      Object.freeze({
+        queue: config.executionResultDeadQueue,
+        exchange: config.deadLetterExchange,
+        routingKey: config.executionResultDeadLetterRoutingKey,
       }),
     ]),
   });

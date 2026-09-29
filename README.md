@@ -1,25 +1,28 @@
 # CodeArena
 
-CodeArena is a Dockerized coding contest platform. Milestone 0 established the infrastructure skeleton. Milestone 1 built the Express API foundation. Milestone 2 added the PostgreSQL database foundation. Milestone 3 added authentication and RBAC. Milestone 4 added Admin and Participant application API contracts. Milestone 5 added the RabbitMQ messaging architecture. **Milestone 6** turns the Worker into a real background consumer of the execution queue, extracts shared messaging into `packages/messaging`, and keeps the API as the job publisher. It does not call Judge0 or execute user code. The official UI is the unified Next.js app in `apps/frontend`, served through Nginx.
+CodeArena is a Dockerized coding contest platform. Milestone 0 established the infrastructure skeleton. Milestone 1 built the Express API foundation. Milestone 2 added the PostgreSQL database foundation. Milestone 3 added authentication and RBAC. Milestone 4 added Admin and Participant application API contracts. Milestone 5 added the RabbitMQ messaging architecture. Milestone 6 turned the Worker into a real background consumer of the execution queue. Milestone 7 integrates an external Judge0 CE instance into the Worker. **Milestone 8** adds Practice Mode: standalone practice problems in PostgreSQL that reuse the same RabbitMQ → Worker → Judge0 execution pipeline. The official UI is the unified Next.js app in `apps/frontend`, served through Nginx.
 
 ## Architecture overview
 
-Intended runtime flow (later milestones):
+Current execution flow (Milestone 7–8):
 
 ```text
-Participant
+Admin UI → Create Contest / Add Question → API → PostgreSQL
+Student UI → Open Contest / Question → Run/Submit
+Student UI → Practice Area → Open Practice Problem → Run/Submit
     ↓
-Backend (Express API)
+API (persist QUEUED submission, publish codearena.execution.requested)
     ↓
-RabbitMQ
+RabbitMQ execution queue
     ↓
-Worker
+Worker → Judge0 (poll) → correctness evaluation
     ↓
-Judge0 + Docker
+RabbitMQ results queue (codearena.execution.completed)
     ↓
-Execution Result
+API consumer updates submissions
     ↓
-Backend
+Student UI polls GET /student/submissions/:id
+          or GET /student/practice/submissions/:id
 ```
 
 Current local HTTP flow:
@@ -35,10 +38,10 @@ Service boundaries:
 
 - **Frontend** is the unified Next.js application (`apps/frontend`) at `/`, `/admin/*`, and `/client/*`.
 - **API** is a separate Express.js service (does not execute user code).
-- **Worker** is a separate Node.js service that consumes RabbitMQ execution jobs (Judge0 arrives in M7).
+- **Worker** is a separate Node.js service that consumes RabbitMQ execution jobs and runs them on Judge0.
 - **PostgreSQL** and **RabbitMQ** provide approved infrastructure.
 - **Nginx** is the local HTTP entry point.
-- **Judge0** is deferred (directory present; Compose service commented out).
+- **Judge0** is external for M7 (Compose service remains commented out). The Worker reaches it via `JUDGE0_URL`.
 - `apps/admin` and `apps/client` remain as Milestone 0 source skeletons and are **not** deployed.
 
 ## Docker architecture
@@ -52,7 +55,7 @@ Browser
 
 postgres (volume: codearena_postgres_data)
 rabbitmq + management UI
-worker (RabbitMQ execution consumer)
+worker (RabbitMQ execution consumer → Judge0)
 ```
 
 All Compose operations use project name `codearena`:
@@ -61,7 +64,7 @@ All Compose operations use project name `codearena`:
 docker compose -p codearena -f docker-compose.yml
 ```
 
-Judge0 is **not** started in Milestone 0.
+Judge0 is **not** started by Compose in Milestone 7. Run Judge0 separately and set `JUDGE0_URL`.
 
 ## Repository structure
 
@@ -150,9 +153,13 @@ Key variables:
 | `JWT_SECRET` / `JWT_EXPIRES_IN` | API JWT signing (required; never commit a real secret) |
 | `RABBITMQ_HOST` / `RABBITMQ_PORT` / `RABBITMQ_USER` / `RABBITMQ_PASSWORD` / `RABBITMQ_VHOST` | Broker connection. Compose sets `RABBITMQ_HOST=rabbitmq` for api and worker |
 | `RABBITMQ_URL` | Optional AMQP URL override. Leave unset to use the variables above |
-| `RABBITMQ_CONSUMER_ENABLED` | Worker: when `true` (default), consume `codearena.execution`. API Compose sets this `false` (producer-only) |
+| `RABBITMQ_CONSUMER_ENABLED` | Worker: when `true` (default), consume `codearena.execution`. API Compose sets this `false` so the API does not consume the *request* queue. The API still consumes `codearena.execution.results` so the UI can poll Judge0 outcomes |
 | `RABBITMQ_RECONNECT_ENABLED` | Worker runtime reconnect. Compose enables it for worker |
 | `CODEARENA_SERVICE_NAME` | Messaging log prefix / AMQP `appId` (`api` or `worker`) |
+| `JUDGE0_URL` | Worker: base URL of an **external** Judge0 CE instance (required). Compose default is `http://host.docker.internal:2358` |
+| `JUDGE0_AUTH_TOKEN` | Worker: Judge0 `X-Auth-Token`. Leave empty when Judge0 auth is disabled |
+| `JUDGE0_POLL_INTERVAL_MS` | Worker: delay between GET /submissions/{token} polls (default `1000`) |
+| `JUDGE0_MAX_POLL_ATTEMPTS` | Worker: hard cap on polls (default `30`). Exhaustion NACKs the job to the DLQ |
 | `API_PORT` / `WORKER_PORT` | Host port bindings (API and Worker health; UI is Nginx only) |
 | `NGINX_PORT` | Local entry port (default `8080`) |
 
@@ -283,11 +290,11 @@ make docker-down-codearena
 | ------- | ---- | -------------------- |
 | `nginx` | Reverse proxy entry | Routes `/api/*` to the API and `/*` to the frontend; `/ws` stub |
 | `frontend` | Unified Next.js UI | Login, `/admin/*`, `/client/*` via Nginx `:8080` |
-| `api` | Express backend | M6: health, DB, auth, admin/student APIs, RabbitMQ **producer** (no execution consumer) |
-| `worker` | Worker process | M6: consumes `codearena.execution`, job processor boundary, graceful shutdown, reconnect |
+| `api` | Express backend | M6/M7: health, DB, auth, admin/student APIs, RabbitMQ **producer** (no execution consumer) |
+| `worker` | Worker process | M7: consumes `codearena.execution`, submits to Judge0, polls, maps status, ACK/DLQ |
 | `postgres` | Database | Application database; API-owned migrations |
 | `rabbitmq` | Message broker | Shared topology: events exchange, system + execution queues, DLX/DLQs |
-| `judge0` | Execution engine | Deferred / commented out |
+| `judge0` | Execution engine | External for M7 (Compose service commented out) |
 
 ## Troubleshooting
 
@@ -337,15 +344,65 @@ From the CodeArena guardrails skill:
 
 ## Current milestone
 
-**Milestone 6 — Worker service**
+**Milestone 7 — Judge0 execution**
 
-Shared messaging lives in `packages/messaging` and is used by both API and Worker. The API connects to RabbitMQ as a **producer**, asserts topology (system + execution queues and DLQs), and does **not** consume the execution queue. The Worker connects, asserts the same topology, consumes `codearena.execution` bound to `codearena.execution.requested`, validates the M5 envelope plus the M6 execution payload (`jobId` required), runs the job processor boundary, and ACK/rejects (DLQ) according to the shared consumer. Worker runtime reconnect uses bounded exponential backoff. Judge0 is not implemented.
+The API remains the RabbitMQ **producer**. The Worker consumes `codearena.execution`, validates the M6 envelope plus M7 Judge0 fields (`jobId`, `sourceCode`, `languageId`, optional `stdin` / `expectedOutput` / `cpuTimeLimit` / `memoryLimit`), submits `POST /submissions?base64_encoded=false&wait=false`, polls `GET /submissions/{token}` until a terminal Judge0 status, maps that status into a CodeArena execution result, then returns so the shared consumer **ACKs**. Judge0 HTTP failures, malformed responses, and poll exhaustion **NACK** to the execution DLQ (M6 semantics). Terminal verdicts such as compilation or runtime errors are successful processing (ACK) with a mapped status.
 
-Message type added in M6: `codearena.execution.requested`. System probe type `codearena.system.test` remains for infrastructure tests only.
+Judge0 stays **outside** Compose. Point `JUDGE0_URL` at a running Judge0 CE instance. An empty `JUDGE0_AUTH_TOKEN` omits the `X-Auth-Token` header.
 
-No contest, submission, Judge0, or notification domain work. No new database tables.
+M7 Judge0 processing is unchanged. Contests, questions, test cases, and submissions are persisted in PostgreSQL (migrations `004`–`006`). The Worker publishes `codearena.execution.completed` after evaluation; the API consumes the results queue and the Student UI polls the submission.
 
-HTTP behavior from Milestone 4 is unchanged:
+**Milestone 8 — Practice Mode**
+
+Practice problems are stored in the existing `questions` table with `is_practice = TRUE` and `contest_id` NULL. They do not belong to a contest. Practice Run/Submit uses the same M7 execution contract: API persists a `QUEUED` submission, publishes `codearena.execution.requested`, the Worker talks to Judge0, and the API results consumer writes the terminal status. The Student Practice Area loads problems from PostgreSQL and polls real submission state. Judge0 remains external; Compose still does not start it.
+
+Student practice endpoints (Bearer JWT + `STUDENT`):
+
+- `GET /api/student/practice/problems`
+- `GET /api/student/practice/problems/:id`
+- `POST /api/student/practice/executions`
+- `GET /api/student/practice/submissions`
+- `GET /api/student/practice/submissions/:id`
+
+Migration `008` seeds three idempotent development practice problems: Hello CodeArena, Sum of Two Numbers, Reverse String. They are separate rows from the contest `Test` seed.
+
+### Manual Judge0 execution
+
+Start CodeArena (`make docker-up-codearena`) and a Judge0 CE instance that the Worker can reach via `JUDGE0_URL`. Then publish one job through the API producer path:
+
+```bash
+# Host (from services/api so @codearena/messaging resolves)
+cd /mnt/d/CodeArena/services/api
+node ../../scripts/publish-execution.js
+node ../../scripts/publish-execution.js --case compile
+node ../../scripts/publish-execution.js --case runtime
+node ../../scripts/publish-execution.js --case timeout
+```
+
+Or from the API container:
+
+```bash
+docker exec -i codearena-api node - < scripts/publish-execution.js
+docker exec -i -e EXECUTION_CASE=compile codearena-api node - < scripts/publish-execution.js
+```
+
+Watch Worker logs:
+
+```bash
+make docker-logs-worker-codearena
+```
+
+Expected success (`print("Hello CodeArena")`, Judge0 Python 3 `language_id=71`):
+
+```text
+codearenaStatus=ACCEPTED stdoutPreview=Hello CodeArena
+```
+
+Override `JUDGE0_LANGUAGE_ID` if your Judge0 build uses a different Python id.
+
+Message type: `codearena.execution.requested`. System probe type `codearena.system.test` remains for infrastructure tests only.
+
+HTTP behavior from Milestone 4 is unchanged for auth:
 
 - Existing `POST /api/auth/register`, `POST /api/auth/login`, and `GET /api/auth/me` are unchanged
 - Public registration still always creates `STUDENT`. A fresh database also seeds one default ADMIN via migration `003` (`admin@codearena.com` / `Admin@123`). The seed is idempotent and does not overwrite an existing account. Change this password before any non-local deployment. There is still no public ADMIN registration endpoint.
@@ -367,8 +424,21 @@ Nginx already strips `/api`, so Express serves `/admin/...` and `/student/...`. 
 | `GET /api/auth/me` | 200 | 200 | 401 |
 | `GET /api/admin/me` | 200 | 403 | 401 |
 | `GET /api/admin/dashboard` | 200 | 403 | 401 |
+| `GET /api/admin/contests` | 200 | 403 | 401 |
+| `POST /api/admin/contests` | 201 | 403 | 401 |
+| `GET /api/admin/contests/:id` | 200 | 403 | 401 |
+| `GET /api/admin/contests/:id/questions` | 200 | 403 | 401 |
+| `POST /api/admin/contests/:id/questions` | 201 | 403 | 401 |
+| `GET /api/admin/questions` | 200 | 403 | 401 |
 | `GET /api/student/me` | 403 | 200 | 401 |
 | `GET /api/student/dashboard` | 403 | 200 | 401 |
+| `GET /api/student/languages` | 403 | 200 | 401 |
+| `GET /api/student/contests` | 403 | 200 | 401 |
+| `GET /api/student/contests/:id` | 403 | 200 | 401 |
+| `GET /api/student/contests/:id/questions` | 403 | 200 | 401 |
+| `POST /api/student/executions` | 403 | 202 | 401 |
+| `GET /api/student/submissions` | 403 | 200 | 401 |
+| `GET /api/student/submissions/:id` | 403 | 200 | 401 |
 
 ### Database configuration
 
@@ -395,12 +465,21 @@ Copy `.env.example` to `.env` (never commit `.env`). The API reads:
 | `RABBITMQ_CONSUMER_ENABLED` | `true` | Worker consumption switch. API Compose sets `false` |
 | `RABBITMQ_RECONNECT_ENABLED` | `false` (host default) | Worker Compose sets `true` |
 | `CODEARENA_SERVICE_NAME` | `api` / `worker` | Messaging identity |
+| `JUDGE0_URL` | required | Worker only. External Judge0 CE base URL |
+| `JUDGE0_AUTH_TOKEN` | empty | Optional. Omit header when empty |
+| `JUDGE0_POLL_INTERVAL_MS` | `1000` | Poll delay |
+| `JUDGE0_MAX_POLL_ATTEMPTS` | `30` | Poll cap |
 
-Do not use `localhost` for container-to-container access; the api service must use the Compose hostname `postgres`.
+Do not use `localhost` for container-to-container access; the api service must use the Compose hostname `postgres`. The Worker must not use `localhost` for Judge0 when Judge0 runs on the host — use `host.docker.internal` (Compose sets `extra_hosts` for this).
 
 ### Migrations
 
-Migrations live in `services/api/src/migrations/` and run automatically when the API process starts. They are versioned, checksummed, and recorded in `schema_migrations`. Re-running them is a no-op for already-applied versions. Never edit an already-applied migration; add a new file instead. Migration `003` seeds one default ADMIN (`admin@codearena.com`) when that email is not already present; it does not add tables.
+Migrations live in `services/api/src/migrations/` and run automatically when the API process starts. They are versioned, checksummed, and recorded in `schema_migrations`. Re-running them is a no-op for already-applied versions. Never edit an already-applied migration; add a new file instead.
+
+- `003` seeds one default ADMIN (`admin@codearena.com`) when that email is not already present; it does not add tables.
+- `004` creates `contests`, `questions`, `question_test_cases`, and `submissions`.
+- `005` idempotently seeds a development contest titled exactly `Test` (not a substitute for Admin Create Contest).
+- `006` keeps that Test contest open for local execution (clears `start_time` so the UI timer does not expire).
 
 ```bash
 make db-migrate-codearena
@@ -430,10 +509,14 @@ Register/login body: `{ "email": "...", "password": "..." }`. Password minimum l
 | `GET` | `/api/admin/dashboard` | `/admin/dashboard` | Bearer JWT + `ADMIN` |
 | `GET` | `/api/student/me` | `/student/me` | Bearer JWT + `STUDENT` |
 | `GET` | `/api/student/dashboard` | `/student/dashboard` | Bearer JWT + `STUDENT` |
+| `GET`/`POST` | `/api/admin/contests` | `/admin/contests` | Bearer JWT + `ADMIN` |
+| `GET`/`POST` | `/api/admin/contests/:id/questions` | `/admin/contests/:id/questions` | Bearer JWT + `ADMIN` |
+| `GET` | `/api/student/contests` | `/student/contests` | Bearer JWT + `STUDENT` |
+| `POST` | `/api/student/executions` | `/student/executions` | Bearer JWT + `STUDENT` (202 + poll `GET /student/submissions/:id`) |
 
 Send `Authorization: Bearer <token>` from `POST /api/auth/login`. Do not send a client-chosen role.
 
-- Frontend login UI is served at `http://localhost:8080`. Contest/problem/submission screens remain mock until later milestones.
+- Frontend login UI is served at `http://localhost:8080`. Contest, practice, and submission screens use the live Student APIs. Real Judge0 results still require a reachable Judge0 instance.
 
 ### Test commands
 
@@ -451,5 +534,4 @@ See `MileStone-doc.md` for the full roadmap.
 
 Planned next (see `MileStone-doc.md`):
 
-- Milestone 7: Judge0 adapter behind the Worker job processor
-- Contests, submissions, WebSockets, and retry/replay remain later milestones
+- WebSockets, retry/replay, and later contest features remain later milestones

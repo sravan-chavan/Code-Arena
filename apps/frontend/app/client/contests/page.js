@@ -1,113 +1,95 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useAuth } from '@/lib/AuthContext';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Button from '@/components/ui/Button';
-import { contests, formatTime, formatDate } from '@/lib/mockData';
-import { Trophy, Clock, Calendar, Users, ChevronRight } from 'lucide-react';
+import { formatDate } from '@/lib/mockData';
+import { fetchStudentContests } from '@/lib/contestsApi';
+import { ApiError } from '@/lib/apiClient';
+import { Trophy, Clock, Calendar, ChevronRight } from 'lucide-react';
 
 export default function ClientContests() {
-  const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState('active'); // active, upcoming, past
+  const [activeTab, setActiveTab] = useState('active');
+  const [contests, setContests] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
-  const activeContests = contests.filter(c => c.status === 'running');
-  const upcomingContests = contests.filter(c => c.status === 'scheduled');
-  const pastContests = contests.filter(c => c.status === 'ended');
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const rows = await fetchStudentContests();
+        if (!cancelled) setContests(rows);
+      } catch (err) {
+        if (!cancelled) setError(err instanceof ApiError ? err.message : 'Unable to load contests.');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
-  const getContestList = () => {
-    if (activeTab === 'active') return activeContests;
-    if (activeTab === 'upcoming') return upcomingContests;
-    return pastContests;
-  };
-
-  const listToRender = getContestList();
+  const activeContests = contests.filter((contest) => contest.status === 'running');
+  const upcomingContests = contests.filter((contest) => contest.status === 'scheduled');
+  const pastContests = contests.filter((contest) => contest.status === 'ended');
+  const listToRender = activeTab === 'active' ? activeContests : activeTab === 'upcoming' ? upcomingContests : pastContests;
 
   return (
     <div className="space-y-6">
       <div className="page-header">
         <h1>Competition Arena</h1>
-        <p>Join live contests, view upcoming schedules, and review past performances.</p>
+        <p>Join live contests and open questions for real Judge0 execution.</p>
       </div>
+      {error ? <p style={{ color: 'var(--accent-rose)' }}>{error}</p> : null}
 
       <div style={{ display: 'flex', borderBottom: '1px solid var(--border-default)', marginBottom: 'var(--space-lg)' }}>
-        <button 
-          style={{ padding: '12px 24px', fontWeight: 600, borderBottom: activeTab === 'active' ? '2px solid var(--accent-cyan)' : '2px solid transparent', color: activeTab === 'active' ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}
-          onClick={() => setActiveTab('active')}
-        >
-          Active Contests ({activeContests.length})
-        </button>
-        <button 
-          style={{ padding: '12px 24px', fontWeight: 600, borderBottom: activeTab === 'upcoming' ? '2px solid var(--accent-blue)' : '2px solid transparent', color: activeTab === 'upcoming' ? 'var(--accent-blue)' : 'var(--text-secondary)' }}
-          onClick={() => setActiveTab('upcoming')}
-        >
-          Upcoming ({upcomingContests.length})
-        </button>
-        <button 
-          style={{ padding: '12px 24px', fontWeight: 600, borderBottom: activeTab === 'past' ? '2px solid var(--text-muted)' : '2px solid transparent', color: activeTab === 'past' ? 'var(--text-primary)' : 'var(--text-secondary)' }}
-          onClick={() => setActiveTab('past')}
-        >
-          Past Contests ({pastContests.length})
-        </button>
+        {[
+          ['active', `Active Contests (${activeContests.length})`],
+          ['upcoming', `Upcoming (${upcomingContests.length})`],
+          ['past', `Past Contests (${pastContests.length})`],
+        ].map(([key, label]) => (
+          <button
+            key={key}
+            style={{ padding: '12px 24px', fontWeight: 600, borderBottom: activeTab === key ? '2px solid var(--accent-cyan)' : '2px solid transparent', color: activeTab === key ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}
+            onClick={() => setActiveTab(key)}
+          >{label}</button>
+        ))}
       </div>
 
       <div style={{ display: 'grid', gap: 'var(--space-md)' }}>
-        {listToRender.length > 0 ? (
-          listToRender.map(contest => {
-            const isEnrolled = contest.participantIds.includes(user.id);
-            return (
-              <Card key={contest.id} hover={true} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <div style={{ display: 'flex', gap: 'var(--space-md)', alignItems: 'center' }}>
-                    <div style={{ width: '48px', height: '48px', borderRadius: 'var(--radius-md)', background: 'var(--bg-secondary)', border: '1px solid var(--border-default)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: activeTab === 'active' ? 'var(--accent-cyan)' : 'var(--text-secondary)' }}>
-                      <Trophy size={24} />
-                    </div>
-                    <div>
-                      <h2 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>{contest.title}</h2>
-                      <div style={{ display: 'flex', gap: 'var(--space-md)', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Clock size={14} /> {contest.duration} mins</span>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Users size={14} /> {contest.participantIds.length} Participants</span>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Calendar size={14} /> {formatDate(contest.createdAt)}</span>
-                      </div>
-                    </div>
-                  </div>
-                  <Badge status={contest.status} />
+        {loading ? <p>Loading contests…</p> : listToRender.length > 0 ? listToRender.map((contest) => (
+          <Card key={contest.id} hover={true}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div style={{ display: 'flex', gap: 'var(--space-md)', alignItems: 'center' }}>
+                <div style={{ width: '48px', height: '48px', borderRadius: 'var(--radius-md)', background: 'var(--bg-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-cyan)' }}>
+                  <Trophy size={24} />
                 </div>
-                
-                <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>{contest.description}</p>
-                
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 'var(--space-sm)', borderTop: '1px solid var(--border-default)' }}>
-                  <div style={{ fontSize: '0.85rem' }}>
-                    {isEnrolled ? (
-                      <span style={{ color: 'var(--accent-emerald)', fontWeight: 600 }}>✓ Registered</span>
-                    ) : (
-                      <span style={{ color: 'var(--text-muted)' }}>Not Registered</span>
-                    )}
+                <div>
+                  <h2 style={{ fontSize: '1.1rem', fontWeight: 700 }}>{contest.title}</h2>
+                  <div style={{ display: 'flex', gap: 'var(--space-md)', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Clock size={14} /> {contest.durationMinutes} mins</span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Calendar size={14} /> {formatDate(contest.createdAt)}</span>
                   </div>
-                  
-                  {activeTab === 'active' ? (
-                    <Link href={`/client/contests/${contest.id}`}>
-                      <Button variant="primary">Enter Arena <ChevronRight size={16} /></Button>
-                    </Link>
-                  ) : activeTab === 'upcoming' ? (
-                    <Button variant={isEnrolled ? 'secondary' : 'primary'}>
-                      {isEnrolled ? 'Withdraw' : 'Register Now'}
-                    </Button>
-                  ) : (
-                    <Link href={`/client/contests/${contest.id}/results`}>
-                      <Button variant="secondary">View Results</Button>
-                    </Link>
-                  )}
                 </div>
-              </Card>
-            );
-          })
-        ) : (
-          <div style={{ textAlign: 'center', padding: 'var(--space-3xl)', background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', border: '1px dashed var(--border-default)' }}>
+              </div>
+              <Badge status={contest.status} />
+            </div>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginTop: 'var(--space-sm)' }}>{contest.description}</p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-md)' }}>
+              {activeTab === 'active' ? (
+                <Link href={`/client/contests/${contest.id}`}>
+                  <Button variant="primary">Enter Arena <ChevronRight size={16} /></Button>
+                </Link>
+              ) : (
+                <Button variant="secondary" disabled>Register / results not in this slice</Button>
+              )}
+            </div>
+          </Card>
+        )) : (
+          <div style={{ textAlign: 'center', padding: 'var(--space-3xl)' }}>
             <Trophy size={48} style={{ margin: '0 auto var(--space-md)', color: 'var(--border-default)' }} />
-            <h3 style={{ fontSize: '1.2rem', color: 'var(--text-primary)', marginBottom: 'var(--space-xs)' }}>No contests found</h3>
-            <p style={{ color: 'var(--text-secondary)' }}>There are no {activeTab} contests at the moment.</p>
+            <h3>No contests found</h3>
           </div>
         )}
       </div>

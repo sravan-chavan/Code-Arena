@@ -23,6 +23,8 @@ const {
   isWorkerMessagingReady,
   getExecutionConsumer,
 } = require('./messaging');
+const { processJob } = require('./processor/job-processor');
+const { createJudge0Client, describeJudge0Endpoint } = require('./judge0');
 const { loadRabbitmqConfig, logMessagingError } = require('@codearena/messaging');
 
 const STATE = Object.freeze({
@@ -38,10 +40,19 @@ const STATE = Object.freeze({
  *   config?: ReturnType<typeof loadWorkerConfig>,
  *   createHealthServer?: boolean,
  *   onReady?: () => void,
+ *   processJobFn?: Function,
+ *   judge0Client?: ReturnType<typeof createJudge0Client>,
+ *   processorDeps?: Record<string, unknown>,
  * }} [options]
  */
 function createWorker(options = {}) {
   const config = validateWorkerConfig(options.config || loadWorkerConfig());
+  const judge0Client = options.judge0Client || createJudge0Client(config.judge0);
+  const processJobFn = options.processJobFn || ((message) => processJob(message, {
+    judge0Client,
+    judge0Config: config.judge0,
+    ...(options.processorDeps || {}),
+  }));
   let state = STATE.STARTING;
   /** @type {import('http').Server | null} */
   let healthServer = null;
@@ -106,7 +117,10 @@ function createWorker(options = {}) {
     try {
       console.log(`[WORKER] Reconnecting to RabbitMQ attempt=${reconnectAttempt}`);
       await stopWorkerMessaging({ graceMs: 1_000 }).catch(() => {});
-      await startWorkerMessaging(config, { onUnexpectedClose: handleUnexpectedClose });
+      await startWorkerMessaging(config, {
+        onUnexpectedClose: handleUnexpectedClose,
+        processJobFn,
+      });
       if (generation !== reconnectGeneration || shuttingDown) {
         await stopWorkerMessaging({ graceMs: 1_000 }).catch(() => {});
         return;
@@ -138,6 +152,7 @@ function createWorker(options = {}) {
       messagingReady: isWorkerMessagingReady(),
       consumerActive: Boolean(consumer),
       queue: loadRabbitmqConfig().executionQueue,
+      judge0: describeJudge0Endpoint(config.judge0),
     };
   }
 
@@ -172,8 +187,13 @@ function createWorker(options = {}) {
     reconnectAttempt = 0;
     clearReconnectTimer();
 
-    console.log(`[WORKER] Worker starting service=${config.serviceName} milestone=${config.milestone}`);
-    await startWorkerMessaging(config, { onUnexpectedClose: handleUnexpectedClose });
+    console.log(
+      `[WORKER] Worker starting service=${config.serviceName} milestone=${config.milestone} ${describeJudge0Endpoint(config.judge0)}`,
+    );
+    await startWorkerMessaging(config, {
+      onUnexpectedClose: handleUnexpectedClose,
+      processJobFn,
+    });
     healthServer = startHealthServer();
     state = STATE.RUNNING;
     console.log('[WORKER] Worker running');

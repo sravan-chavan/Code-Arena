@@ -17,6 +17,7 @@ const {
 } = require('@codearena/messaging');
 const { createWorker } = require('../../src/lifecycle');
 const { processJob } = require('../../src/processor/job-processor');
+const { JUDGE0_STATUS } = require('../../src/judge0');
 
 function loadRootEnv() {
   const envPath = path.join(__dirname, '..', '..', '..', '.env');
@@ -63,6 +64,42 @@ function applyTestRabbitEnv() {
   process.env.RABBITMQ_RECONNECT_ENABLED = 'false';
   process.env.CODEARENA_SERVICE_NAME = 'worker';
   process.env.WORKER_HEALTH_ENABLED = 'false';
+  process.env.JUDGE0_URL = process.env.JUDGE0_URL || 'http://127.0.0.1:2358';
+}
+
+function pythonHelloPayload(extra = {}) {
+  return {
+    jobId: extra.jobId || randomUUID(),
+    sourceCode: extra.sourceCode === undefined ? 'print("Hello CodeArena")' : extra.sourceCode,
+    languageId: extra.languageId === undefined ? 71 : extra.languageId,
+    ...extra,
+  };
+}
+
+function fakeJudge0Client() {
+  return {
+    async createSubmission(submission) {
+      if (submission && submission.sourceCode === '__fail_judge0__') {
+        const error = new Error('Judge0 is unavailable');
+        error.code = 'JUDGE0_UNAVAILABLE';
+        throw error;
+      }
+      return { token: 'integration-token' };
+    },
+    async getSubmission() {
+      return {
+        token: 'integration-token',
+        stdout: 'Hello CodeArena\n',
+        stderr: null,
+        compile_output: null,
+        message: null,
+        exit_code: 0,
+        time: '0.01',
+        memory: 1024,
+        status: { id: JUDGE0_STATUS.ACCEPTED, description: 'Accepted' },
+      };
+    },
+  };
 }
 
 function sleep(ms) {
@@ -165,6 +202,10 @@ async function purgeExecutionQueues() {
   const channel = getPublishChannel();
   await channel.purgeQueue(config.executionQueue);
   await channel.purgeQueue(config.executionDeadQueue);
+  if (config.executionResultQueue) {
+    await channel.purgeQueue(config.executionResultQueue).catch(() => {});
+    await channel.purgeQueue(config.executionResultDeadQueue).catch(() => {});
+  }
 }
 
 describe('Worker RabbitMQ integration', () => {
@@ -200,7 +241,10 @@ describe('Worker RabbitMQ integration', () => {
   });
 
   it('starts, asserts topology, and registers the execution consumer', async () => {
-    worker = createWorker({ createHealthServer: false });
+    worker = createWorker({
+      createHealthServer: false,
+      judge0Client: fakeJudge0Client(),
+    });
     await worker.start();
     const status = worker.getStatus();
     assert.equal(status.state, 'running');
@@ -222,7 +266,7 @@ describe('Worker RabbitMQ integration', () => {
     const jobId = randomUUID();
     const published = await publish({
       type: MESSAGE_TYPES.EXECUTION_REQUESTED,
-      payload: { jobId, note: 'ack-path' },
+      payload: pythonHelloPayload({ jobId, note: 'ack-path' }),
     });
 
     await waitFor(async () => {
@@ -256,6 +300,21 @@ describe('Worker RabbitMQ integration', () => {
     const published = await publish({
       type: MESSAGE_TYPES.EXECUTION_REQUESTED,
       payload: { jobId: randomUUID(), disposition: 'fail' },
+    });
+
+    const dead = await waitFor(() => deadLetterFor(published.messageId));
+    assert.ok(dead);
+    assert.equal(dead.properties.headers['x-death'][0].queue, config.executionQueue);
+    assert.equal(worker.getStatus().state, 'running');
+  });
+
+  it('rejects Judge0 communication failures to the execution DLQ', async () => {
+    assert.ok(worker);
+    const config = loadRabbitmqConfig();
+    await purgeExecutionQueues();
+    const published = await publish({
+      type: MESSAGE_TYPES.EXECUTION_REQUESTED,
+      payload: pythonHelloPayload({ sourceCode: '__fail_judge0__' }),
     });
 
     const dead = await waitFor(() => deadLetterFor(published.messageId));
@@ -299,17 +358,17 @@ describe('Worker RabbitMQ integration', () => {
     const seen = [];
     const second = await consume(config.executionQueue, async (message) => {
       seen.push(message.messageId);
-      await processJob(message);
+      await processJob(message, { judge0Client: fakeJudge0Client() });
     });
 
     try {
       const first = await publish({
         type: MESSAGE_TYPES.EXECUTION_REQUESTED,
-        payload: { jobId: randomUUID() },
+        payload: pythonHelloPayload(),
       });
       const secondMsg = await publish({
         type: MESSAGE_TYPES.EXECUTION_REQUESTED,
-        payload: { jobId: randomUUID() },
+        payload: pythonHelloPayload(),
       });
 
       await waitFor(async () => {

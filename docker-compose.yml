@@ -79,7 +79,8 @@ services:
       RABBITMQ_USER: ${RABBITMQ_USER}
       RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       RABBITMQ_VHOST: "/"
-      # M6: API is producer-only. Execution consumption belongs to Worker.
+      # Do not consume the execution *request* queue (Worker owns that).
+      # server.js still consumes codearena.execution.results so the UI can poll.
       RABBITMQ_CONSUMER_ENABLED: "false"
     ports:
       - "${API_PORT:-4000}:${API_INTERNAL_PORT:-4000}"
@@ -115,6 +116,13 @@ services:
       RABBITMQ_CONSUMER_ENABLED: "true"
       RABBITMQ_RECONNECT_ENABLED: "true"
       RABBITMQ_PREFETCH: ${RABBITMQ_PREFETCH:-1}
+      JUDGE0_URL: ${JUDGE0_URL:-http://host.docker.internal:2358}
+      JUDGE0_AUTH_TOKEN: ${JUDGE0_AUTH_TOKEN:-}
+      JUDGE0_POLL_INTERVAL_MS: ${JUDGE0_POLL_INTERVAL_MS:-1000}
+      JUDGE0_MAX_POLL_ATTEMPTS: ${JUDGE0_MAX_POLL_ATTEMPTS:-30}
+      JUDGE0_REQUEST_TIMEOUT_MS: ${JUDGE0_REQUEST_TIMEOUT_MS:-10000}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${WORKER_PORT:-4001}:${WORKER_INTERNAL_PORT:-4001}"
     depends_on:
@@ -171,8 +179,9 @@ services:
       retries: 5
       start_period: 20s
 
-  # Judge0 is deferred. Do not enable until the official local Judge0
-  # configuration for CodeArena is explicitly decided in a later milestone.
+  # Judge0 is external for M7. Do not enable this service until an official
+  # in-compose Judge0 setup is explicitly decided. The Worker talks to Judge0
+  # via JUDGE0_URL (default: http://host.docker.internal:2358).
   # judge0:
   #   image: <official-judge0-image>
   #   container_name: codearena-judge0

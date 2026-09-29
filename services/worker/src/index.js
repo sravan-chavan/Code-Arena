@@ -1,12 +1,14 @@
 /**
- * CodeArena Worker service entrypoint (Milestone 6).
+ * CodeArena Worker service entrypoint (Milestone 7).
  *
- * Owns RabbitMQ execution consumption, job processing boundary, lifecycle,
- * and graceful shutdown. Does not call Judge0 or execute user code.
+ * Owns RabbitMQ execution consumption, Judge0 submission + polling, job
+ * processing, lifecycle, and graceful shutdown. Does not execute user code
+ * inside this process — Judge0 is the sandbox.
  */
 
 const { createWorker } = require('./lifecycle');
 const { loadRabbitmqConfig } = require('@codearena/messaging');
+const { describeJudge0Endpoint } = require('./judge0');
 
 async function main() {
   // Worker enables reconnect by default unless explicitly disabled.
@@ -27,8 +29,9 @@ async function main() {
 
   await worker.start();
   const rabbit = loadRabbitmqConfig();
+  const workerStatus = worker.getStatus();
   console.log(
-    `[WORKER] Ready queue=${rabbit.executionQueue} prefetch=${rabbit.prefetch} reconnect=${rabbit.reconnectEnabled}`,
+    `[WORKER] Ready queue=${rabbit.executionQueue} prefetch=${rabbit.prefetch} reconnect=${rabbit.reconnectEnabled} ${describeJudge0Endpoint(workerStatus.config.judge0)}`,
   );
 }
 

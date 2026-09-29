@@ -1,20 +1,81 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Button from '@/components/ui/Button';
-import { contests, formatTime, formatDate } from '@/lib/mockData';
-import { Plus, Search, Trophy, Edit, Trash2, Users, Play, Square } from 'lucide-react';
+import { formatDate } from '@/lib/mockData';
+import { createAdminContest, fetchAdminContests } from '@/lib/contestsApi';
+import { ApiError } from '@/lib/apiClient';
+import { Plus, Search, Trophy, Users } from 'lucide-react';
+
+const emptyForm = { title: '', description: '', durationMinutes: 60 };
 
 export default function AdminContests() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filter, setFilter] = useState('all');
+  const [contests, setContests] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState(emptyForm);
+  const [saving, setSaving] = useState(false);
+  const [success, setSuccess] = useState('');
 
-  const filteredContests = contests.filter(c => {
-    const matchesSearch = c.title.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesFilter = filter === 'all' || c.status === filter;
+  async function load() {
+    setError('');
+    try {
+      setContests(await fetchAdminContests());
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Unable to load contests.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const rows = await fetchAdminContests();
+        if (!cancelled) setContests(rows);
+      } catch (err) {
+        if (!cancelled) setError(err instanceof ApiError ? err.message : 'Unable to load contests.');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const filteredContests = contests.filter((contest) => {
+    const matchesSearch = contest.title.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesFilter = filter === 'all' || contest.status === filter;
     return matchesSearch && matchesFilter;
   });
+
+  async function handleCreate(event) {
+    event.preventDefault();
+    setSaving(true);
+    setError('');
+    setSuccess('');
+    try {
+      const created = await createAdminContest({
+        title: form.title,
+        description: form.description,
+        durationMinutes: Number(form.durationMinutes) || 60,
+        status: 'running',
+      });
+      setSuccess(`Created contest “${created.title}”.`);
+      setForm(emptyForm);
+      setShowForm(false);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Unable to create contest.');
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -23,46 +84,51 @@ export default function AdminContests() {
           <h1 style={{ fontSize: '1.75rem', fontWeight: 700, background: 'linear-gradient(135deg, var(--text-primary), var(--accent-cyan))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', fontFamily: 'var(--font-display)' }}>Contest Management</h1>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginTop: '4px' }}>Create, monitor, and manage coding competitions.</p>
         </div>
-        <Button variant="primary" className="btn-lg">
+        <Button variant="primary" className="btn-lg" onClick={() => setShowForm((open) => !open)}>
           <Plus size={18} /> Create New Contest
         </Button>
       </div>
 
+      {error ? <p style={{ color: 'var(--accent-rose)' }}>{error}</p> : null}
+      {success ? <p style={{ color: 'var(--accent-emerald)' }}>{success}</p> : null}
+
+      {showForm ? (
+        <Card>
+          <form onSubmit={handleCreate} style={{ display: 'grid', gap: 'var(--space-md)' }}>
+            <div className="form-group">
+              <label>Title</label>
+              <input className="form-input" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required maxLength={120} />
+            </div>
+            <div className="form-group">
+              <label>Description</label>
+              <textarea className="form-input" rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+            </div>
+            <div className="form-group">
+              <label>Duration (minutes)</label>
+              <input className="form-input" type="number" min={1} value={form.durationMinutes} onChange={(e) => setForm({ ...form, durationMinutes: e.target.value })} />
+            </div>
+            <div style={{ display: 'flex', gap: 'var(--space-sm)' }}>
+              <Button type="submit" variant="primary" disabled={saving}>{saving ? 'Creating…' : 'Save contest'}</Button>
+              <Button type="button" variant="secondary" onClick={() => setShowForm(false)}>Cancel</Button>
+            </div>
+          </form>
+        </Card>
+      ) : null}
+
       <Card>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-md)' }}>
           <div style={{ display: 'flex', gap: 'var(--space-sm)' }}>
-            <button 
-              className={`btn btn-sm ${filter === 'all' ? 'btn-secondary' : 'btn-ghost'}`} 
-              onClick={() => setFilter('all')}
-              style={{ border: filter === 'all' ? '1px solid var(--border-hover)' : 'none' }}
-            >All</button>
-            <button 
-              className={`btn btn-sm ${filter === 'running' ? 'btn-secondary' : 'btn-ghost'}`} 
-              onClick={() => setFilter('running')}
-              style={{ border: filter === 'running' ? '1px solid var(--accent-emerald)' : 'none' }}
-            >Running</button>
-            <button 
-              className={`btn btn-sm ${filter === 'scheduled' ? 'btn-secondary' : 'btn-ghost'}`} 
-              onClick={() => setFilter('scheduled')}
-              style={{ border: filter === 'scheduled' ? '1px solid var(--accent-blue)' : 'none' }}
-            >Scheduled</button>
-            <button 
-              className={`btn btn-sm ${filter === 'draft' ? 'btn-secondary' : 'btn-ghost'}`} 
-              onClick={() => setFilter('draft')}
-              style={{ border: filter === 'draft' ? '1px solid var(--text-muted)' : 'none' }}
-            >Drafts</button>
+            {['all', 'running', 'scheduled', 'draft'].map((value) => (
+              <button
+                key={value}
+                className={`btn btn-sm ${filter === value ? 'btn-secondary' : 'btn-ghost'}`}
+                onClick={() => setFilter(value)}
+              >{value === 'all' ? 'All' : value[0].toUpperCase() + value.slice(1)}</button>
+            ))}
           </div>
-          
           <div style={{ position: 'relative', width: '300px' }}>
             <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-            <input 
-              type="text" 
-              placeholder="Search contests..." 
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="form-input"
-              style={{ paddingLeft: '36px', paddingBottom: '8px', paddingTop: '8px' }}
-            />
+            <input type="text" placeholder="Search contests..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="form-input" style={{ paddingLeft: '36px' }} />
           </div>
         </div>
 
@@ -73,13 +139,14 @@ export default function AdminContests() {
                 <th>Contest Details</th>
                 <th>Status</th>
                 <th>Duration</th>
-                <th>Participants</th>
+                <th>Questions</th>
                 <th>Created</th>
-                <th style={{ textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {filteredContests.length > 0 ? filteredContests.map(contest => (
+              {loading ? (
+                <tr><td colSpan="5" style={{ textAlign: 'center', padding: 'var(--space-xl)' }}>Loading contests…</td></tr>
+              ) : filteredContests.length > 0 ? filteredContests.map((contest) => (
                 <tr key={contest.id}>
                   <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -87,40 +154,24 @@ export default function AdminContests() {
                         <Trophy size={20} />
                       </div>
                       <div>
-                        <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{contest.title}</div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{contest.questionIds.length} Questions</div>
+                        <Link href={`/admin/contests/${contest.id}`} style={{ fontWeight: 600, color: 'var(--accent-cyan)' }}>{contest.title}</Link>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{contest.questionCount || 0} Questions</div>
                       </div>
                     </div>
                   </td>
                   <td><Badge status={contest.status} /></td>
-                  <td>
-                    <div style={{ fontSize: '0.85rem' }}>{contest.duration} mins</div>
-                    {contest.status === 'running' && (
-                      <div style={{ fontSize: '0.75rem', color: 'var(--accent-emerald)', fontFamily: 'var(--font-code)' }}>{formatTime(contest.remainingTime)} left</div>
-                    )}
-                  </td>
+                  <td><div style={{ fontSize: '0.85rem' }}>{contest.durationMinutes} mins</div></td>
                   <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                      <Users size={14} /> {contest.participantIds.length} / {contest.maxParticipants}
+                      <Users size={14} /> {contest.questionCount || 0}
                     </div>
                   </td>
                   <td style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{formatDate(contest.createdAt)}</td>
-                  <td style={{ textAlign: 'right' }}>
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
-                      {contest.status === 'running' ? (
-                        <Button variant="ghost" className="btn-icon" style={{ color: 'var(--accent-amber)' }} title="Pause"><Square size={16} /></Button>
-                      ) : (
-                        <Button variant="ghost" className="btn-icon" style={{ color: 'var(--accent-emerald)' }} title="Start"><Play size={16} /></Button>
-                      )}
-                      <Button variant="ghost" className="btn-icon" style={{ color: 'var(--text-secondary)' }} title="Edit"><Edit size={16} /></Button>
-                      <Button variant="ghost" className="btn-icon" style={{ color: 'var(--accent-rose)' }} title="Delete"><Trash2 size={16} /></Button>
-                    </div>
-                  </td>
                 </tr>
               )) : (
                 <tr>
-                  <td colSpan="6" style={{ textAlign: 'center', padding: 'var(--space-xl)', color: 'var(--text-secondary)' }}>
-                    No contests found matching your search.
+                  <td colSpan="5" style={{ textAlign: 'center', padding: 'var(--space-xl)', color: 'var(--text-secondary)' }}>
+                    No contests found.
                   </td>
                 </tr>
               )}

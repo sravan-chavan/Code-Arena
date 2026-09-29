@@ -7,6 +7,10 @@ const {
   loadRabbitmqConfig,
   validateRabbitmqConfig,
 } = require('@codearena/messaging');
+const {
+  loadJudge0Config,
+  validateJudge0Config,
+} = require('./judge0/config');
 
 function parsePositiveInt(value, fallback) {
   const parsed = Number.parseInt(String(value), 10);
@@ -19,6 +23,7 @@ function parsePositiveInt(value, fallback) {
 function loadWorkerConfig(env = process.env) {
   const nodeEnv = env.NODE_ENV || 'development';
   const rabbit = loadRabbitmqConfig(env);
+  const judge0 = loadJudge0Config(env);
 
   return Object.freeze({
     env: nodeEnv,
@@ -27,17 +32,19 @@ function loadWorkerConfig(env = process.env) {
     port: parsePositiveInt(env.PORT, 4001),
     host: env.HOST || '0.0.0.0',
     serviceName: (env.CODEARENA_SERVICE_NAME || 'worker').trim() || 'worker',
-    milestone: 6,
+    milestone: 7,
     shutdownGraceMs: parsePositiveInt(env.WORKER_SHUTDOWN_GRACE_MS, 8_000),
     healthEnabled: env.WORKER_HEALTH_ENABLED === undefined
       ? true
       : !['0', 'false', 'no', 'off'].includes(String(env.WORKER_HEALTH_ENABLED).trim().toLowerCase()),
     rabbit,
+    judge0,
   });
 }
 
 function validateWorkerConfig(config = loadWorkerConfig()) {
   validateRabbitmqConfig(config.rabbit);
+  validateJudge0Config(config.judge0);
   return config;
 }
 

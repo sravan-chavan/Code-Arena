@@ -18,6 +18,8 @@ const DEFAULT_SYSTEM_QUEUE = 'codearena.system';
 const DEFAULT_SYSTEM_DLQ = 'codearena.system.dlq';
 const DEFAULT_EXECUTION_QUEUE = 'codearena.execution';
 const DEFAULT_EXECUTION_DLQ = 'codearena.execution.dlq';
+const DEFAULT_EXECUTION_RESULT_QUEUE = 'codearena.execution.results';
+const DEFAULT_EXECUTION_RESULT_DLQ = 'codearena.execution.results.dlq';
 
 function parseIntOrDefault(value, fallback, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
   if (value === undefined || value === null || value === '') {
@@ -98,6 +100,10 @@ function loadRabbitmqConfig(env = process.env) {
     executionDeadQueue: clean(env.RABBITMQ_EXECUTION_DLQ) || DEFAULT_EXECUTION_DLQ,
     executionRoutingKey: MESSAGE_TYPES.EXECUTION_REQUESTED,
     executionDeadLetterRoutingKey: DEAD_LETTER_ROUTING_KEYS.EXECUTION_REQUESTED,
+    executionResultQueue: clean(env.RABBITMQ_EXECUTION_RESULT_QUEUE) || DEFAULT_EXECUTION_RESULT_QUEUE,
+    executionResultDeadQueue: clean(env.RABBITMQ_EXECUTION_RESULT_DLQ) || DEFAULT_EXECUTION_RESULT_DLQ,
+    executionResultRoutingKey: MESSAGE_TYPES.EXECUTION_COMPLETED,
+    executionResultDeadLetterRoutingKey: DEAD_LETTER_ROUTING_KEYS.EXECUTION_COMPLETED,
     prefetch: parseIntOrDefault(env.RABBITMQ_PREFETCH, 1, { min: 1, max: 1000 }),
     consumerEnabled: parseBoolean(env.RABBITMQ_CONSUMER_ENABLED, true),
     connectAttempts: parseIntOrDefault(env.RABBITMQ_CONNECT_ATTEMPTS, 10, { min: 1, max: 100 }),
@@ -196,4 +202,6 @@ module.exports = {
   DEFAULT_SYSTEM_DLQ,
   DEFAULT_EXECUTION_QUEUE,
   DEFAULT_EXECUTION_DLQ,
+  DEFAULT_EXECUTION_RESULT_QUEUE,
+  DEFAULT_EXECUTION_RESULT_DLQ,
 };
