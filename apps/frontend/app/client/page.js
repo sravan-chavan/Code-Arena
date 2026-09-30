@@ -1,22 +1,25 @@
 'use client';
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/AuthContext';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Button from '@/components/ui/Button';
 import { formatDate, formatTime } from '@/lib/mockData';
-import { fetchStudentContests, fetchStudentSubmissions, formatStatus } from '@/lib/contestsApi';
+import { enterContest, fetchStudentContests, fetchStudentSubmissions, formatStatus } from '@/lib/contestsApi';
 import { ApiError } from '@/lib/apiClient';
 import { Trophy, Code, CheckCircle, Activity } from 'lucide-react';
 import Link from 'next/link';
 
 export default function ClientDashboard() {
   const { user, application, applicationError } = useAuth();
+  const router = useRouter();
   const dashboard = application?.dashboard;
   const applicationName = application?.me?.application?.name;
   const [contests, setContests] = useState([]);
   const [submissions, setSubmissions] = useState([]);
   const [error, setError] = useState('');
+  const [enteringId, setEnteringId] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -116,8 +119,27 @@ export default function ClientDashboard() {
                         {formatTime(contest.remainingTime == null ? contest.durationMinutes * 60 : contest.remainingTime)}
                       </span>
                     </div>
-                    <Link href={contest.canEnter ? `/client/contests/${contest.id}/arena` : `/client/contests/${contest.id}`}>
-                      <Button variant="primary" className="btn-sm">{contest.canEnter ? 'Enter Arena' : 'View contest'}</Button>
+                    <Link href={contest.canEnter ? '#' : `/client/contests/${contest.id}`}>
+                      <Button
+                        variant="primary"
+                        className="btn-sm"
+                        disabled={enteringId === contest.id}
+                        onClick={async (event) => {
+                          if (!contest.canEnter) return;
+                          event.preventDefault();
+                          setEnteringId(contest.id);
+                          try {
+                            await enterContest(contest.id);
+                            router.push(`/client/contests/${contest.id}/arena`);
+                          } catch (err) {
+                            setError(err instanceof ApiError ? err.message : 'Unable to enter contest.');
+                          } finally {
+                            setEnteringId('');
+                          }
+                        }}
+                      >
+                        {contest.canEnter ? (enteringId === contest.id ? 'Entering…' : 'Enter Arena') : 'View contest'}
+                      </Button>
                     </Link>
                   </div>
                 </div>

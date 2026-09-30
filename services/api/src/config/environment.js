@@ -23,7 +23,7 @@ const config = Object.freeze({
   port: parsePositiveInt(process.env.PORT, 4000),
   host: process.env.HOST || '0.0.0.0',
   serviceName: process.env.CODEARENA_SERVICE_NAME || 'api',
-  milestone: 9,
+  milestone: 10,
   bodyLimit: process.env.API_BODY_LIMIT || '100kb',
   db: loadDatabaseConfig(),
   jwt: loadJwtConfig(),

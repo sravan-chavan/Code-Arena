@@ -15,10 +15,12 @@ function errorMiddleware(err, req, res, _next) {
   let message = 'Internal server error';
   let errors = [];
 
+  let code;
   if (err instanceof AppError) {
     statusCode = err.statusCode;
     message = err.message;
     errors = err.errors || [];
+    code = err.code;
   } else if (err?.type === 'entity.parse.failed') {
     statusCode = 400;
     message = 'Invalid JSON payload';
@@ -45,7 +47,7 @@ function errorMiddleware(err, req, res, _next) {
     res.setHeader('X-Request-Id', req.requestId);
   }
 
-  return sendError(res, message, statusCode, errors);
+  return sendError(res, message, statusCode, errors, code);
 }
 
 module.exports = errorMiddleware;

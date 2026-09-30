@@ -24,6 +24,10 @@ router.post('/contests/:id/questions/:questionId', ...requireAdmin, asyncHandler
 router.post('/contests/:id/questions', ...requireAdmin, asyncHandler(contestController.createQuestion));
 router.patch('/contests/:id/questions/order', ...requireAdmin, asyncHandler(contestController.reorderQuestions));
 router.get('/contests/:id/participants', ...requireAdmin, asyncHandler(contestController.listParticipants));
+router.post('/contests/:id/participants/:participantId/remove', ...requireAdmin, asyncHandler(contestController.removeParticipant));
+router.get('/contests/:id/ranking', ...requireAdmin, asyncHandler(contestController.ranking));
+router.get('/contests/:id/submissions', ...requireAdmin, asyncHandler(contestController.listSubmissions));
+router.get('/contests/:id/violations', ...requireAdmin, asyncHandler(contestController.listViolations));
 router.get('/questions', ...requireAdmin, asyncHandler(contestController.listQuestions));
 router.post('/questions', ...requireAdmin, asyncHandler(contestController.createLibraryQuestion));
 router.get('/questions/:questionId/test-cases', ...requireAdmin, asyncHandler(contestController.listTestCases));

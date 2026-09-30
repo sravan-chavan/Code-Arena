@@ -58,6 +58,7 @@ function mapTestCase(row) {
     expectedOutput: row.expected_output,
     isHidden: row.is_hidden,
     sortOrder: row.sort_order,
+    points: row.points === undefined || row.points === null ? 10 : Number(row.points),
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
   };
 }
@@ -78,6 +79,19 @@ async function questionsHaveContestIdColumn(client) {
      WHERE table_schema = 'public'
        AND table_name = 'questions'
        AND column_name = 'contest_id'`,
+    [],
+    client,
+  );
+  return Boolean(row);
+}
+
+async function testCasesHavePointsColumn(client) {
+  const row = await queryOne(
+    `SELECT 1 AS ok
+     FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = 'question_test_cases'
+       AND column_name = 'points'`,
     [],
     client,
   );
@@ -448,17 +462,30 @@ async function update(id, fields, client) {
 }
 
 async function createTestCase(input, client) {
+  const hasPoints = await testCasesHavePointsColumn(client);
+  const values = [
+    input.questionId,
+    input.stdin || '',
+    input.expectedOutput || '',
+    Boolean(input.isHidden),
+    input.sortOrder || 0,
+  ];
+  if (hasPoints) {
+    values.push(input.points === undefined || input.points === null ? 10 : Number(input.points));
+    const row = await queryOne(
+      `INSERT INTO question_test_cases (question_id, stdin, expected_output, is_hidden, sort_order, points)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      values,
+      client,
+    );
+    return mapTestCase(row);
+  }
   const row = await queryOne(
     `INSERT INTO question_test_cases (question_id, stdin, expected_output, is_hidden, sort_order)
      VALUES ($1, $2, $3, $4, $5)
      RETURNING *`,
-    [
-      input.questionId,
-      input.stdin || '',
-      input.expectedOutput || '',
-      Boolean(input.isHidden),
-      input.sortOrder || 0,
-    ],
+    values,
     client,
   );
   return mapTestCase(row);
@@ -504,6 +531,7 @@ async function updateTestCase(id, questionId, fields, client) {
     expectedOutput: 'expected_output',
     isHidden: 'is_hidden',
     sortOrder: 'sort_order',
+    points: 'points',
   };
   for (const [key, column] of Object.entries(columns)) {
     if (Object.prototype.hasOwnProperty.call(fields, key)) {

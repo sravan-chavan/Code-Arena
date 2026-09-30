@@ -34,6 +34,13 @@ export function serverNowMs(serverTime, fetchedAtMs = Date.now()) {
   return Date.now() + (parsed - fetchedAtMs);
 }
 
+export function remainingFromDeadline(deadline, nowMs) {
+  if (!deadline) return null;
+  const end = Date.parse(deadline);
+  if (Number.isNaN(end)) return null;
+  return Math.max(0, Math.floor((end - nowMs) / 1000));
+}
+
 export function remainingFromContest(contest, nowMs) {
   if (!contest) return null;
   if (contest.status === 'scheduled' && contest.startTime) {

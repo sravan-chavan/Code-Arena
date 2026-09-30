@@ -1,9 +1,11 @@
 const contestService = require('../contests/contest.service');
 const questionService = require('../contests/question.service');
 const submissionService = require('../submissions/submission.service');
+const sessionService = require('../contests/session.service');
 const { listLanguages } = require('../config/languages');
 const { sendSuccess } = require('../utils/api-response');
 const { assertUuid } = require('../utils/input');
+const AppError = require('../errors/AppError');
 
 async function listContests(req, res) {
   const contests = await contestService.listStudentContests(req.user);
@@ -73,6 +75,67 @@ async function listSubmissions(req, res) {
   return sendSuccess(res, { submissions }, 200);
 }
 
+async function enter(req, res) {
+  const session = await sessionService.enterContest(
+    req.user,
+    assertUuid(req.params.id, 'id'),
+  );
+  return sendSuccess(res, { session }, 200);
+}
+
+async function getSession(req, res) {
+  const session = await sessionService.getSession(
+    req.user,
+    assertUuid(req.params.id, 'id'),
+  );
+  return sendSuccess(res, { session }, 200);
+}
+
+async function exit(req, res) {
+  const session = await sessionService.exitContest(
+    req.user,
+    assertUuid(req.params.id, 'id'),
+  );
+  return sendSuccess(res, { session }, 200);
+}
+
+async function setCurrentQuestion(req, res) {
+  const session = await sessionService.setCurrentQuestion(
+    req.user,
+    assertUuid(req.params.id, 'id'),
+    assertUuid((req.body || {}).questionId, 'questionId'),
+  );
+  return sendSuccess(res, { session }, 200);
+}
+
+async function reportViolation(req, res) {
+  const type = (req.body || {}).type;
+  if (type !== 'TAB_SWITCH') {
+    throw new AppError('type must be TAB_SWITCH', 400, { code: 'VALIDATION_ERROR' });
+  }
+  const payload = await sessionService.reportTabSwitch(
+    req.user,
+    assertUuid(req.params.id, 'id'),
+  );
+  return sendSuccess(res, payload, 201);
+}
+
+async function ranking(req, res) {
+  const rankingRows = await submissionService.getStudentRanking(
+    req.user,
+    assertUuid(req.params.id, 'id'),
+  );
+  return sendSuccess(res, { ranking: rankingRows }, 200);
+}
+
+async function listContestSubmissions(req, res) {
+  const submissions = await submissionService.listOwnedContestSubmissions(
+    req.user,
+    assertUuid(req.params.id, 'id'),
+  );
+  return sendSuccess(res, { submissions }, 200);
+}
+
 module.exports = {
   listContests,
   getContest,
@@ -84,4 +147,11 @@ module.exports = {
   createExecution,
   getSubmission,
   listSubmissions,
+  enter,
+  getSession,
+  exit,
+  setCurrentQuestion,
+  reportViolation,
+  ranking,
+  listContestSubmissions,
 };

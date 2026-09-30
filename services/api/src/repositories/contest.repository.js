@@ -16,6 +16,7 @@ function mapContest(row) {
     isDevelopmentSeed: row.is_development_seed,
     questionCount: row.question_count === undefined ? undefined : Number(row.question_count),
     participantCount: row.participant_count === undefined ? undefined : Number(row.participant_count),
+    totalPoints: row.total_points === undefined ? undefined : Number(row.total_points),
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
   };
@@ -26,7 +27,12 @@ const COUNT_SELECT = `
     SELECT COUNT(*)::int FROM contest_questions cq WHERE cq.contest_id = c.id
   ) AS question_count, (
     SELECT COUNT(*)::int FROM contest_participants p WHERE p.contest_id = c.id
-  ) AS participant_count
+  ) AS participant_count, (
+    SELECT COALESCE(SUM(tc.points), 0)::int
+    FROM contest_questions cq
+    JOIN question_test_cases tc ON tc.question_id = cq.question_id
+    WHERE cq.contest_id = c.id
+  ) AS total_points
   FROM contests c
 `;
 
@@ -61,6 +67,7 @@ async function create(input, client) {
     ...mapped,
     questionCount: 0,
     participantCount: 0,
+    totalPoints: 0,
   };
 }
 

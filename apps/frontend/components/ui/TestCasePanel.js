@@ -9,9 +9,18 @@ import {
 } from '@/lib/contestsApi';
 import { ApiError } from '@/lib/apiClient';
 
-const emptyDraft = { stdin: '', expectedOutput: '', isHidden: true };
+const emptyDraft = { stdin: '', expectedOutput: '', isHidden: true, points: '' };
 
-export default function TestCasePanel({ questionId, onChanged }) {
+function editFromRow(row) {
+  return {
+    stdin: row.stdin || '',
+    expectedOutput: row.expectedOutput || '',
+    isHidden: Boolean(row.isHidden),
+    points: row.points === undefined || row.points === null ? '' : String(row.points),
+  };
+}
+
+export default function TestCasePanel({ questionId, totalPoints, onChanged }) {
   const [open, setOpen] = useState(false);
   const [cases, setCases] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -28,11 +37,7 @@ export default function TestCasePanel({ questionId, onChanged }) {
     try {
       const rows = await fetchAdminTestCases(questionId);
       setCases(rows);
-      setEdits(Object.fromEntries(rows.map((row) => [row.id, {
-        stdin: row.stdin || '',
-        expectedOutput: row.expectedOutput || '',
-        isHidden: Boolean(row.isHidden),
-      }])));
+      setEdits(Object.fromEntries(rows.map((row) => [row.id, editFromRow(row)])));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Unable to load test cases.');
     } finally {
@@ -45,6 +50,9 @@ export default function TestCasePanel({ questionId, onChanged }) {
       load();
     }
   }, [open, load]);
+
+  const loadedTotal = cases.reduce((sum, row) => sum + Number(row.points || 0), 0);
+  const displayedTotal = totalPoints === undefined || totalPoints === null ? loadedTotal : Number(totalPoints);
 
   async function run(work, okMessage) {
     setSaving(true);
@@ -62,6 +70,13 @@ export default function TestCasePanel({ questionId, onChanged }) {
     }
   }
 
+  function pointsPayload(value) {
+    if (value === undefined || value === null || value === '') return {};
+    const parsed = Number.parseInt(String(value), 10);
+    if (!Number.isInteger(parsed)) return {};
+    return { points: parsed };
+  }
+
   async function handleAdd(event) {
     event.preventDefault();
     if (!draft.expectedOutput) {
@@ -73,6 +88,7 @@ export default function TestCasePanel({ questionId, onChanged }) {
         stdin: draft.stdin,
         expectedOutput: draft.expectedOutput,
         isHidden: draft.isHidden,
+        ...pointsPayload(draft.points),
       });
       setDraft(emptyDraft);
     }, 'Test case added.');
@@ -89,6 +105,7 @@ export default function TestCasePanel({ questionId, onChanged }) {
         stdin: edit.stdin,
         expectedOutput: edit.expectedOutput,
         isHidden: edit.isHidden,
+        ...pointsPayload(edit.points),
       });
     }, 'Test case updated.');
   }
@@ -97,6 +114,17 @@ export default function TestCasePanel({ questionId, onChanged }) {
     await run(async () => {
       await deleteAdminTestCase(questionId, testCaseId);
     }, 'Test case deleted.');
+  }
+
+  async function move(index, direction) {
+    const target = index + direction;
+    if (target < 0 || target >= cases.length) return;
+    const current = cases[index];
+    const swap = cases[target];
+    await run(async () => {
+      await updateAdminTestCase(questionId, current.id, { sortOrder: swap.sortOrder });
+      await updateAdminTestCase(questionId, swap.id, { sortOrder: current.sortOrder });
+    }, 'Test case order updated.');
   }
 
   return (
@@ -115,9 +143,9 @@ export default function TestCasePanel({ questionId, onChanged }) {
         }}
       >
         <span>{open ? '▼' : '▶'}</span> Test Cases
-        {cases.length > 0 ? (
+        {cases.length > 0 || displayedTotal ? (
           <span style={{ color: 'var(--text-muted)', fontWeight: 500, fontSize: '0.8rem' }}>
-            ({cases.length})
+            ({cases.length || 0} · {displayedTotal} pts)
           </span>
         ) : null}
       </button>
@@ -126,11 +154,20 @@ export default function TestCasePanel({ questionId, onChanged }) {
           {error ? <p style={{ color: 'var(--accent-rose)' }}>{error}</p> : null}
           {success ? <p style={{ color: 'var(--accent-emerald)' }}>{success}</p> : null}
           {loading ? <p style={{ color: 'var(--text-secondary)' }}>Loading test cases…</p> : null}
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+            Question total: {displayedTotal} points (from persisted test cases)
+          </p>
           {cases.map((testCase, index) => {
             const edit = edits[testCase.id] || emptyDraft;
             return (
               <div key={testCase.id} style={{ padding: 'var(--space-md)', background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)', display: 'grid', gap: 'var(--space-sm)' }}>
-                <strong>Test Case {index + 1}</strong>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                  <strong>Test Case {index + 1} · {testCase.points} pts</strong>
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    <Button type="button" variant="secondary" className="btn-sm" disabled={saving || index === 0} onClick={() => move(index, -1)}>Up</Button>
+                    <Button type="button" variant="secondary" className="btn-sm" disabled={saving || index === cases.length - 1} onClick={() => move(index, 1)}>Down</Button>
+                  </div>
+                </div>
                 <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Input</label>
                 <textarea
                   className="form-input"
@@ -151,6 +188,17 @@ export default function TestCasePanel({ questionId, onChanged }) {
                     [testCase.id]: { ...edit, expectedOutput: event.target.value },
                   }))}
                   required
+                />
+                <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Points</label>
+                <input
+                  className="form-input"
+                  type="number"
+                  min="1"
+                  value={edit.points}
+                  onChange={(event) => setEdits((current) => ({
+                    ...current,
+                    [testCase.id]: { ...edit, points: event.target.value },
+                  }))}
                 />
                 <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem' }}>
                   <input
@@ -180,6 +228,8 @@ export default function TestCasePanel({ questionId, onChanged }) {
             <textarea className="form-input" rows={3} value={draft.stdin} onChange={(event) => setDraft({ ...draft, stdin: event.target.value })} />
             <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Expected Output</label>
             <textarea className="form-input" rows={3} value={draft.expectedOutput} onChange={(event) => setDraft({ ...draft, expectedOutput: event.target.value })} required />
+            <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Points (leave blank for backend default)</label>
+            <input className="form-input" type="number" min="1" value={draft.points} onChange={(event) => setDraft({ ...draft, points: event.target.value })} />
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem' }}>
               <input type="checkbox" checked={draft.isHidden} onChange={(event) => setDraft({ ...draft, isHidden: event.target.checked })} />
               Hidden

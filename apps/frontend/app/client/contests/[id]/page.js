@@ -1,24 +1,26 @@
 'use client';
 import { useCallback, useEffect, useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Button from '@/components/ui/Button';
 import ContestTimer from '@/components/ui/ContestTimer';
 import { formatDateTime } from '@/lib/contestTime';
-import { fetchStudentContest, fetchStudentQuestions, registerForContest } from '@/lib/contestsApi';
+import { enterContest, fetchStudentContest, fetchStudentQuestions, registerForContest } from '@/lib/contestsApi';
 import { ApiError } from '@/lib/apiClient';
 import { ChevronLeft } from 'lucide-react';
 
 export default function StudentContestDetail() {
   const { id } = useParams();
+  const router = useRouter();
   const [contest, setContest] = useState(null);
   const [questions, setQuestions] = useState([]);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(true);
   const [registering, setRegistering] = useState(false);
+  const [entering, setEntering] = useState(false);
 
   const load = useCallback(async () => {
     const nextContest = await fetchStudentContest(id);
@@ -65,6 +67,19 @@ export default function StudentContestDetail() {
     }
   }
 
+  async function handleEnter() {
+    setEntering(true);
+    setError('');
+    try {
+      await enterContest(id);
+      router.push(`/client/contests/${id}/arena`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Unable to enter contest.');
+    } finally {
+      setEntering(false);
+    }
+  }
+
   if (loading) return <p style={{ padding: 'var(--space-xl)' }}>Loading contest…</p>;
   if (!contest) return <p style={{ padding: 'var(--space-xl)', color: 'var(--accent-rose)' }}>{error || 'Contest not found.'}</p>;
 
@@ -107,9 +122,9 @@ export default function StudentContestDetail() {
             </Button>
           ) : null}
           {contest.canEnter ? (
-            <Link href={`/client/contests/${contest.id}/arena`}>
-              <Button variant="primary">Enter Contest</Button>
-            </Link>
+            <Button variant="primary" disabled={entering} onClick={handleEnter}>
+              {entering ? 'Entering…' : 'Enter Contest'}
+            </Button>
           ) : null}
         </div>
       </Card>

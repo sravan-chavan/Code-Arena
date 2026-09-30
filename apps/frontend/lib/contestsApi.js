@@ -20,6 +20,41 @@ export async function registerForContest(id) {
   return data.registration;
 }
 
+export async function enterContest(id) {
+  const data = await api.post(`/student/contests/${id}/enter`, {});
+  return data.session;
+}
+
+export async function fetchContestSession(id) {
+  const data = await api.get(`/student/contests/${id}/session`);
+  return data.session;
+}
+
+export async function exitContest(id) {
+  const data = await api.post(`/student/contests/${id}/exit`, {});
+  return data.session;
+}
+
+export async function setCurrentQuestion(contestId, questionId) {
+  const data = await api.post(`/student/contests/${contestId}/current-question`, { questionId });
+  return data.session;
+}
+
+export async function reportContestViolation(contestId, type = 'TAB_SWITCH') {
+  const data = await api.post(`/student/contests/${contestId}/violations`, { type });
+  return data;
+}
+
+export async function fetchStudentRanking(contestId) {
+  const data = await api.get(`/student/contests/${contestId}/ranking`);
+  return data.ranking || [];
+}
+
+export async function fetchStudentContestSubmissions(contestId) {
+  const data = await api.get(`/student/contests/${contestId}/submissions`);
+  return data.submissions || [];
+}
+
 export async function fetchStudentRegistration(id) {
   const data = await api.get(`/student/contests/${id}/registration`);
   return data.registration;
@@ -109,6 +144,26 @@ export async function endAdminContest(id) {
 export async function fetchAdminParticipants(id) {
   const data = await api.get(`/admin/contests/${id}/participants`);
   return data.participants || [];
+}
+
+export async function removeAdminParticipant(contestId, participantId) {
+  const data = await api.post(`/admin/contests/${contestId}/participants/${participantId}/remove`, {});
+  return data.participant;
+}
+
+export async function fetchAdminRanking(contestId) {
+  const data = await api.get(`/admin/contests/${contestId}/ranking`);
+  return data.ranking || [];
+}
+
+export async function fetchAdminContestSubmissions(contestId) {
+  const data = await api.get(`/admin/contests/${contestId}/submissions`);
+  return data.submissions || [];
+}
+
+export async function fetchAdminViolations(contestId) {
+  const data = await api.get(`/admin/contests/${contestId}/violations`);
+  return data.violations || [];
 }
 
 export async function fetchAdminQuestions(contestId) {
