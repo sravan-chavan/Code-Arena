@@ -4,6 +4,7 @@ const participantRepository = require('../repositories/participant.repository');
 const questionRepository = require('../repositories/question.repository');
 const clock = require('./clock');
 const lifecycle = require('./contest.lifecycle');
+const sessionService = require('./session.service');
 const { trimRequired } = require('../utils/input');
 
 const { STATUSES } = lifecycle;
@@ -355,9 +356,6 @@ async function assertArenaAccess(user, contestId) {
   if (!lifecycle.canEnter(effective, participant)) {
     throw lifecycle.arenaDeniedError(effective, participant);
   }
-  if (participant.status === lifecycle.PARTICIPANT_STATUSES.REGISTERED) {
-    await participantRepository.markStarted(participant.id);
-  }
   return contest;
 }
 
@@ -372,15 +370,29 @@ async function assertExecutionAccess(user, question, requestedContestId) {
     });
   }
   const contest = await syncStoredStatus(await requireContest(requestedContestId));
-  const participant = await participantRepository.findByContestAndUser(requestedContestId, user.id);
+  if (contest.status === STATUSES.DRAFT) {
+    throw new AppError('Question not found', 404, { code: 'NOT_FOUND' });
+  }
+  const existing = await participantRepository.findByContestAndUser(requestedContestId, user.id);
   const effective = lifecycle.computeEffectiveStatus(contest);
-  if (!lifecycle.canEnter(effective, participant)) {
-    throw lifecycle.executionDeniedError(effective, participant);
+  if (existing && lifecycle.isParticipantClosed(existing)) {
+    throw lifecycle.executionDeniedError(effective, existing);
   }
-  if (participant.status === lifecycle.PARTICIPANT_STATUSES.REGISTERED) {
-    await participantRepository.markStarted(participant.id);
+  if (!lifecycle.canEnter(effective, existing)) {
+    throw lifecycle.executionDeniedError(effective, existing);
   }
-  return contest;
+  await sessionService.enterContest(user, requestedContestId);
+  const participant = await sessionService.requireActiveSession(user, contest, {
+    forExecution: true,
+  });
+  const questionStateRepository = require('../repositories/question-state.repository');
+  const state = await questionStateRepository.find(requestedContestId, participant.id, question.id);
+  if (state && state.invalidated) {
+    throw new AppError('This question has been invalidated for you.', 409, {
+      code: 'QUESTION_INVALIDATED',
+    });
+  }
+  return { contest, participant };
 }
 
 module.exports = {

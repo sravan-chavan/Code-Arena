@@ -24,7 +24,7 @@ describe('Database health API', () => {
     const res = await request(app).get('/health').expect(200);
     assert.equal(res.body.success, true);
     assert.equal(res.body.data.status, 'ok');
-    assert.equal(res.body.data.milestone, 9);
+    assert.equal(res.body.data.milestone, 10);
   });
 
   it('GET /v1/health/db succeeds when PostgreSQL is available', async () => {

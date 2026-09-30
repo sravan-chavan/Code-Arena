@@ -1,10 +1,10 @@
 # CodeArena
 
-CodeArena is a Dockerized coding contest platform. Milestone 0 established the infrastructure skeleton. Milestone 1 built the Express API foundation. Milestone 2 added the PostgreSQL database foundation. Milestone 3 added authentication and RBAC. Milestone 4 added Admin and Participant application API contracts. Milestone 5 added the RabbitMQ messaging architecture. Milestone 6 turned the Worker into a real background consumer of the execution queue. Milestone 7 integrates an external Judge0 CE instance into the Worker. **Milestone 8** adds Practice Mode: standalone practice problems in PostgreSQL that reuse the same RabbitMQ → Worker → Judge0 execution pipeline. The official UI is the unified Next.js app in `apps/frontend`, served through Nginx.
+CodeArena is a Dockerized coding contest platform. Milestone 0 established the infrastructure skeleton. Milestone 1 built the Express API foundation. Milestone 2 added the PostgreSQL database foundation. Milestone 3 added authentication and RBAC. Milestone 4 added Admin and Participant application API contracts. Milestone 5 added the RabbitMQ messaging architecture. Milestone 6 turned the Worker into a real background consumer of the execution queue. Milestone 7 integrates an external Judge0 CE instance into the Worker. Milestone 8 adds Practice Mode. Milestone 9 adds the contest engine (lifecycle, registration, reusable questions). **Milestone 10** adds contest evaluation: per-test points, contest submissions, scoring, penalty, ranking, contest sessions/timers, tab-switch invalidation, and admin participant removal. The official UI is the unified Next.js app in `apps/frontend`, served through Nginx.
 
 ## Architecture overview
 
-Current execution flow (Milestone 7–8):
+Current execution flow (Milestone 7–10):
 
 ```text
 Admin UI → Create Contest / Add Question → API → PostgreSQL
@@ -568,6 +568,10 @@ Register/login body: `{ "email": "...", "password": "..." }`. Password minimum l
 | `POST` | `/api/admin/contests/:id/questions/:questionId` | `/admin/contests/:id/questions/:questionId` | Bearer JWT + `ADMIN` |
 | `PATCH` | `/api/admin/contests/:id/questions/order` | `/admin/contests/:id/questions/order` | Bearer JWT + `ADMIN` |
 | `GET` | `/api/admin/contests/:id/participants` | `/admin/contests/:id/participants` | Bearer JWT + `ADMIN` |
+| `POST` | `/api/admin/contests/:id/participants/:participantId/remove` | `/admin/contests/:id/participants/:participantId/remove` | Bearer JWT + `ADMIN` |
+| `GET` | `/api/admin/contests/:id/ranking` | `/admin/contests/:id/ranking` | Bearer JWT + `ADMIN` |
+| `GET` | `/api/admin/contests/:id/submissions` | `/admin/contests/:id/submissions` | Bearer JWT + `ADMIN` |
+| `GET` | `/api/admin/contests/:id/violations` | `/admin/contests/:id/violations` | Bearer JWT + `ADMIN` |
 | `GET`/`POST` | `/api/admin/questions` | `/admin/questions` | Bearer JWT + `ADMIN` |
 | `GET`/`PATCH` | `/api/admin/questions/:questionId` | `/admin/questions/:questionId` | Bearer JWT + `ADMIN` |
 | `GET`/`POST` | `/api/admin/questions/:questionId/test-cases` | `/admin/questions/:questionId/test-cases` | Bearer JWT + `ADMIN` |
@@ -575,16 +579,27 @@ Register/login body: `{ "email": "...", "password": "..." }`. Password minimum l
 | `GET` | `/api/student/contests` | `/student/contests` | Bearer JWT + `STUDENT` |
 | `POST` | `/api/student/contests/:id/register` | `/student/contests/:id/register` | Bearer JWT + `STUDENT` |
 | `GET` | `/api/student/contests/:id/registration` | `/student/contests/:id/registration` | Bearer JWT + `STUDENT` |
+| `POST` | `/api/student/contests/:id/enter` | `/student/contests/:id/enter` | Bearer JWT + `STUDENT` |
+| `GET` | `/api/student/contests/:id/session` | `/student/contests/:id/session` | Bearer JWT + `STUDENT` |
+| `POST` | `/api/student/contests/:id/exit` | `/student/contests/:id/exit` | Bearer JWT + `STUDENT` (hidden Ctrl+Shift+C only) |
+| `POST` | `/api/student/contests/:id/current-question` | `/student/contests/:id/current-question` | Bearer JWT + `STUDENT` |
+| `POST` | `/api/student/contests/:id/violations` | `/student/contests/:id/violations` | Bearer JWT + `STUDENT` |
+| `GET` | `/api/student/contests/:id/ranking` | `/student/contests/:id/ranking` | Bearer JWT + `STUDENT` |
+| `GET` | `/api/student/contests/:id/submissions` | `/student/contests/:id/submissions` | Bearer JWT + `STUDENT` |
 | `POST` | `/api/student/executions` | `/student/executions` | Bearer JWT + `STUDENT` (202 + poll `GET /student/submissions/:id`) |
 
 Send `Authorization: Bearer <token>` from `POST /api/auth/login`. Do not send a client-chosen role.
 
 - Frontend login UI is served at `http://localhost:8080`. Contest, practice, and submission screens use the live Student/Admin APIs. Real Judge0 results still require a reachable Judge0 instance.
 
+Test-case points default to **10** in PostgreSQL. Question and contest totals are `SUM(points)` from persisted test cases. Contest ranking is HTTP-only (no WebSockets). Penalty is ICPC-inspired and documented in `services/api/src/contests/scoring.js` because MileStone-doc.md does not define a numeric formula: for each scoring question, minutes from contest start (or session start) to the first submission that reached the current earned points, plus 20 minutes per earlier wrong submit.
+
+The Contest Arena has no visible exit control. Closing a session uses a hidden application shortcut **Ctrl+Shift+C**. Chrome may consume that combination for its element picker, so JavaScript does not always receive it. The browser cannot lock down OS-level switching; M10 records `visibilitychange` events as `TAB_SWITCH` violations.
+
 Planned next (see `MileStone-doc.md`):
 
-- Contest evaluation / scoring (Milestone 10)
-- WebSockets, retry/replay, and later operational features remain later milestones
+- WebSockets / live ranking (Milestone 11)
+- Retry/replay and later operational features remain later milestones
 
 ### Test commands
 
@@ -592,6 +607,7 @@ Planned next (see `MileStone-doc.md`):
 make test                 # API + Worker unit tests (no PostgreSQL, no RabbitMQ)
 make db-test-codearena    # integration tests against PostgreSQL and RabbitMQ
 make test-codearena       # unit + integration
+make e2e-codearena        # Playwright against http://localhost:8080
 ```
 
 Integration tests require the Compose `postgres` and `rabbitmq` services. They fail clearly if either is not available; they are not skipped. Messaging and Worker tests publish and consume against the real broker; they are not mock-only.

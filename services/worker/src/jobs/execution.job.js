@@ -177,8 +177,12 @@ function optionalTestCases(value) {
       throw new MessageContractError(`payload.testCases[${index}] must be an object`);
     }
     return Object.freeze({
+      id: typeof entry.id === 'string' ? entry.id : null,
       stdin: typeof entry.stdin === 'string' ? entry.stdin : '',
       expectedOutput: typeof entry.expectedOutput === 'string' ? entry.expectedOutput : '',
+      points: Number.isInteger(entry.points) && entry.points > 0 ? entry.points : 10,
+      isHidden: Boolean(entry.isHidden),
+      sortOrder: Number.isInteger(entry.sortOrder) ? entry.sortOrder : index,
     });
   });
 }

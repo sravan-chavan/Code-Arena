@@ -73,6 +73,8 @@ async function publishCompleted(result, deps) {
       testsPassed: result.testsPassed,
       testsTotal: result.testsTotal,
       languageId: result.languageId,
+      score: result.score,
+      testResults: result.testResults,
     },
   });
 }
@@ -108,9 +110,15 @@ async function runOneCase(client, poll, job, judge0Config, message, deps, testCa
   const mapped = mapJudge0Submission(raw);
   const status = verdictForCase(mapped, testCase.expectedOutput);
   const judge0Name = mapped.judge0StatusDescription || judge0StatusName(mapped.judge0StatusId);
-  console.log(
-    `[WORKER] Judge0 execution completed messageId=${message.messageId} token=${mapped.token} judge0Status=${judge0Name} codearenaStatus=${status} exitCode=${mapped.exitCode} time=${mapped.time} memory=${mapped.memory} stdoutPreview=${previewText(mapped.stdout)}`,
-  );
+  if (!testCase.isHidden) {
+    console.log(
+      `[WORKER] Judge0 execution completed messageId=${message.messageId} token=${mapped.token} judge0Status=${judge0Name} codearenaStatus=${status} exitCode=${mapped.exitCode} time=${mapped.time} memory=${mapped.memory} stdoutPreview=${previewText(mapped.stdout)}`,
+    );
+  } else {
+    console.log(
+      `[WORKER] Judge0 execution completed messageId=${message.messageId} token=${mapped.token} judge0Status=${judge0Name} codearenaStatus=${status} hidden=true`,
+    );
+  }
   return Object.freeze({ ...mapped, status });
 }
 
@@ -157,20 +165,41 @@ async function processExecutionJob(job, message, deps = {}) {
   const cases = casesForJob(job);
 
   console.log(
-    `[WORKER] Execution received messageId=${message.messageId} jobId=${job.jobId} languageId=${job.languageId} cases=${cases.length}`,
+    `[WORKER] Execution received messageId=${message.messageId} jobId=${job.jobId} contestId=${job.contestId || 'none'} questionId=${job.questionId || 'none'} languageId=${job.languageId} cases=${cases.length}`,
   );
 
   let last = null;
   let testsPassed = 0;
-  let overall = EXECUTION_STATUS.ACCEPTED;
+  const testResults = [];
 
-  for (const testCase of cases) {
+  for (const [index, testCase] of cases.entries()) {
     last = await runOneCase(client, poll, job, judge0Config, message, deps, testCase);
-    if (last.status !== EXECUTION_STATUS.ACCEPTED) {
-      overall = last.status;
-      break;
+    const passed = last.status === EXECUTION_STATUS.ACCEPTED;
+    if (passed) {
+      testsPassed += 1;
     }
-    testsPassed += 1;
+    const points = Number.isInteger(testCase.points) && testCase.points > 0 ? testCase.points : 10;
+    testResults.push({
+      testCaseId: testCase.id || null,
+      sortOrder: Number.isInteger(testCase.sortOrder) ? testCase.sortOrder : index,
+      isHidden: Boolean(testCase.isHidden),
+      status: last.status,
+      passed,
+      points,
+      pointsEarned: passed ? points : 0,
+      time: last.time,
+      memory: last.memory,
+    });
+  }
+
+  const score = testResults.reduce((sum, row) => sum + Number(row.pointsEarned || 0), 0);
+  let overall = EXECUTION_STATUS.ACCEPTED;
+  if (testResults.some((row) => !row.passed)) {
+    if (testResults.some((row) => row.passed)) {
+      overall = EXECUTION_STATUS.WRONG_ANSWER;
+    } else {
+      overall = (last && last.status) || EXECUTION_STATUS.WRONG_ANSWER;
+    }
   }
 
   const result = Object.freeze({
@@ -181,6 +210,8 @@ async function processExecutionJob(job, message, deps = {}) {
     languageId: job.languageId,
     testsPassed,
     testsTotal: cases.length,
+    score,
+    testResults,
     milestone: 7,
   });
 

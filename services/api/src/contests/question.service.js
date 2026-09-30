@@ -4,6 +4,7 @@ const questionRepository = require('../repositories/question.repository');
 const contestService = require('./contest.service');
 const { withTransaction } = require('../db/transaction');
 const { trimRequired } = require('../utils/input');
+const { parsePoints, sumTestCasePoints } = require('./scoring');
 
 const DIFFICULTIES = new Set(['easy', 'medium', 'hard']);
 
@@ -22,11 +23,15 @@ function assignmentOf(question) {
 
 function toAdminQuestion(question) {
   const contests = Array.isArray(question.contests) ? question.contests : [];
+  const testCases = Array.isArray(question.testCases) ? question.testCases : [];
   return {
     ...question,
     contests,
     contestCount: contests.length,
     assignment: assignmentOf({ ...question, contests }),
+    totalPoints: question.totalPoints !== undefined
+      ? Number(question.totalPoints)
+      : sumTestCasePoints(testCases),
   };
 }
 
@@ -54,6 +59,8 @@ function publicTestCase(testCase) {
     stdin: testCase.stdin,
     expectedOutput: testCase.expectedOutput,
     isHidden: false,
+    points: testCase.points,
+    sortOrder: testCase.sortOrder,
   };
 }
 
@@ -94,11 +101,18 @@ function parseOneTestCase(testCase, index) {
   if (testCase.stdin !== undefined && typeof testCase.stdin !== 'string') {
     throw new AppError('stdin must be a string', 400, { code: 'VALIDATION_ERROR' });
   }
+  let points;
+  try {
+    points = parsePoints(testCase.points);
+  } catch (err) {
+    throw new AppError(err.message, 400, { code: 'VALIDATION_ERROR' });
+  }
   return {
     stdin: typeof testCase.stdin === 'string' ? testCase.stdin : '',
     expectedOutput: testCase.expectedOutput,
     isHidden: Boolean(testCase.isHidden),
-    sortOrder: index,
+    sortOrder: Number.isInteger(testCase.sortOrder) ? testCase.sortOrder : index,
+    points,
   };
 }
 
@@ -232,6 +246,7 @@ async function attachCases(question, { includeHidden }) {
   return {
     ...question,
     ...sample,
+    totalPoints: sumTestCasePoints(testCases),
     testCases: includeHidden
       ? testCases
       : testCases.filter((testCase) => !testCase.isHidden).map(publicTestCase),
@@ -326,6 +341,7 @@ async function createAdminTestCase(questionId, body) {
     expectedOutput: parsed.expectedOutput,
     isHidden: parsed.isHidden,
     sortOrder,
+    points: parsed.points,
   });
 }
 
@@ -353,6 +369,21 @@ async function updateAdminTestCase(questionId, testCaseId, body) {
   }
   if (body.isHidden !== undefined) {
     fields.isHidden = Boolean(body.isHidden);
+  }
+  if (body.sortOrder !== undefined) {
+    if (!Number.isInteger(body.sortOrder) || body.sortOrder < 0) {
+      throw new AppError('sortOrder must be a non-negative integer', 400, {
+        code: 'VALIDATION_ERROR',
+      });
+    }
+    fields.sortOrder = body.sortOrder;
+  }
+  if (body.points !== undefined) {
+    try {
+      fields.points = parsePoints(body.points);
+    } catch (err) {
+      throw new AppError(err.message, 400, { code: 'VALIDATION_ERROR' });
+    }
   }
   const updated = await questionRepository.updateTestCase(testCaseId, questionId, fields);
   if (!updated) {
@@ -424,7 +455,21 @@ async function listStudentQuestions(user, contestId) {
   const withCases = await Promise.all(
     questions.map((question) => attachCases(question, { includeHidden: false })),
   );
-  return withCases.map(toStudentQuestion);
+  const participantRepository = require('../repositories/participant.repository');
+  const questionStateRepository = require('../repositories/question-state.repository');
+  const participant = await participantRepository.findByContestAndUser(contestId, user.id);
+  const states = participant
+    ? await questionStateRepository.listByParticipant(contestId, participant.id)
+    : [];
+  const byQuestion = new Map(states.map((row) => [row.questionId, row]));
+  return withCases.map((question) => {
+    const state = byQuestion.get(question.id);
+    return {
+      ...toStudentQuestion(question),
+      invalidated: Boolean(state && state.invalidated),
+      earnedPoints: state && state.invalidated ? 0 : Number(state && state.earnedPoints || 0),
+    };
+  });
 }
 
 async function getStudentQuestion(user, contestId, questionId) {
@@ -434,7 +479,18 @@ async function getStudentQuestion(user, contestId, questionId) {
   if (!question || question.isPractice || !attached) {
     throw new AppError('Question not found', 404, { code: 'NOT_FOUND' });
   }
-  return toStudentQuestion(await attachCases({ ...question, contestId }, { includeHidden: false }));
+  const mapped = toStudentQuestion(await attachCases({ ...question, contestId }, { includeHidden: false }));
+  const participantRepository = require('../repositories/participant.repository');
+  const questionStateRepository = require('../repositories/question-state.repository');
+  const participant = await participantRepository.findByContestAndUser(contestId, user.id);
+  const state = participant
+    ? await questionStateRepository.find(contestId, participant.id, questionId)
+    : null;
+  return {
+    ...mapped,
+    invalidated: Boolean(state && state.invalidated),
+    earnedPoints: state && state.invalidated ? 0 : Number(state && state.earnedPoints || 0),
+  };
 }
 
 async function listPracticeProblems() {

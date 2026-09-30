@@ -1,5 +1,7 @@
 const contestService = require('../contests/contest.service');
 const questionService = require('../contests/question.service');
+const sessionService = require('../contests/session.service');
+const submissionService = require('../submissions/submission.service');
 const { sendSuccess } = require('../utils/api-response');
 const { assertUuid } = require('../utils/input');
 
@@ -147,6 +149,31 @@ async function listParticipants(req, res) {
   return sendSuccess(res, { participants }, 200);
 }
 
+async function removeParticipant(req, res) {
+  const participant = await sessionService.removeParticipant(
+    assertUuid(req.params.id, 'id'),
+    assertUuid(req.params.participantId, 'participantId'),
+  );
+  return sendSuccess(res, { participant }, 200);
+}
+
+async function ranking(req, res) {
+  const rankingRows = await submissionService.getAdminRanking(assertUuid(req.params.id, 'id'));
+  return sendSuccess(res, { ranking: rankingRows }, 200);
+}
+
+async function listSubmissions(req, res) {
+  const submissions = await submissionService.listAdminContestSubmissions(
+    assertUuid(req.params.id, 'id'),
+  );
+  return sendSuccess(res, { submissions }, 200);
+}
+
+async function listViolations(req, res) {
+  const violations = await sessionService.listViolations(assertUuid(req.params.id, 'id'));
+  return sendSuccess(res, { violations }, 200);
+}
+
 module.exports = {
   listContests,
   createContest,
@@ -168,4 +195,8 @@ module.exports = {
   reorderQuestions,
   getQuestion,
   listParticipants,
+  removeParticipant,
+  ranking,
+  listSubmissions,
+  listViolations,
 };

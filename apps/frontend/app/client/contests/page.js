@@ -1,12 +1,13 @@
 'use client';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Button from '@/components/ui/Button';
 import ContestTimer from '@/components/ui/ContestTimer';
 import { formatDateTime } from '@/lib/contestTime';
-import { fetchStudentContests, registerForContest } from '@/lib/contestsApi';
+import { enterContest, fetchStudentContests, registerForContest } from '@/lib/contestsApi';
 import { ApiError } from '@/lib/apiClient';
 import { Trophy, Clock, Calendar, ChevronRight } from 'lucide-react';
 
@@ -35,6 +36,8 @@ export default function ClientContests() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [registeringId, setRegisteringId] = useState('');
+  const [enteringId, setEnteringId] = useState('');
+  const router = useRouter();
 
   async function load() {
     setContests(await fetchStudentContests());
@@ -71,6 +74,19 @@ export default function ClientContests() {
       setError(err instanceof ApiError ? err.message : 'Unable to register.');
     } finally {
       setRegisteringId('');
+    }
+  }
+
+  async function handleEnter(contestId) {
+    setEnteringId(contestId);
+    setError('');
+    try {
+      await enterContest(contestId);
+      router.push(`/client/contests/${contestId}/arena`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Unable to enter contest.');
+    } finally {
+      setEnteringId('');
     }
   }
 
@@ -125,11 +141,17 @@ export default function ClientContests() {
                       {registeringId === contest.id ? 'Registering…' : 'Register'}
                     </Button>
                   ) : null}
-                  <Link href={action.href}>
-                    <Button variant={contest.canRegister ? 'secondary' : action.variant}>
-                      {contest.canRegister ? 'Details' : action.label} <ChevronRight size={16} />
+                  {contest.canEnter ? (
+                    <Button variant="primary" disabled={enteringId === contest.id} onClick={() => handleEnter(contest.id)}>
+                      {enteringId === contest.id ? 'Entering…' : 'Enter Contest'}
                     </Button>
-                  </Link>
+                  ) : (
+                    <Link href={action.href}>
+                      <Button variant={contest.canRegister ? 'secondary' : action.variant}>
+                        {contest.canRegister ? 'Details' : action.label} <ChevronRight size={16} />
+                      </Button>
+                    </Link>
+                  )}
                 </div>
               </div>
             </Card>

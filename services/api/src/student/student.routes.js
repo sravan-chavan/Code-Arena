@@ -22,6 +22,13 @@ router.get('/contests', ...requireStudent, asyncHandler(contestController.listCo
 router.get('/contests/:id', ...requireStudent, asyncHandler(contestController.getContest));
 router.post('/contests/:id/register', ...requireStudent, asyncHandler(contestController.register));
 router.get('/contests/:id/registration', ...requireStudent, asyncHandler(contestController.getRegistration));
+router.post('/contests/:id/enter', ...requireStudent, asyncHandler(contestController.enter));
+router.get('/contests/:id/session', ...requireStudent, asyncHandler(contestController.getSession));
+router.post('/contests/:id/exit', ...requireStudent, asyncHandler(contestController.exit));
+router.post('/contests/:id/current-question', ...requireStudent, asyncHandler(contestController.setCurrentQuestion));
+router.post('/contests/:id/violations', ...requireStudent, asyncHandler(contestController.reportViolation));
+router.get('/contests/:id/ranking', ...requireStudent, asyncHandler(contestController.ranking));
+router.get('/contests/:id/submissions', ...requireStudent, asyncHandler(contestController.listContestSubmissions));
 router.get('/contests/:id/questions', ...requireStudent, asyncHandler(contestController.listQuestions));
 router.get('/contests/:id/questions/:questionId', ...requireStudent, asyncHandler(contestController.getQuestion));
 router.post('/executions', ...requireStudent, asyncHandler(contestController.createExecution));

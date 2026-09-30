@@ -278,13 +278,14 @@ export default function AdminQuestions() {
                 <th>Assignment</th>
                 <th>Difficulty</th>
                 <th>Test Cases</th>
+                <th>Points</th>
                 <th>Created</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan="7" style={{ textAlign: 'center', padding: 'var(--space-xl)' }}>Loading questions…</td></tr>
+                <tr><td colSpan="8" style={{ textAlign: 'center', padding: 'var(--space-xl)' }}>Loading questions…</td></tr>
               ) : filteredQuestions.length > 0 ? filteredQuestions.map((question) => (
                 <Fragment key={question.id}>
                   <tr>
@@ -293,6 +294,7 @@ export default function AdminQuestions() {
                     <td>{assignmentCell(question)}</td>
                     <td><Badge status={question.difficulty} /></td>
                     <td>{question.testCases?.filter((t) => !t.isHidden).length || 0} public, {question.testCases?.filter((t) => t.isHidden).length || 0} hidden</td>
+                    <td>{question.totalPoints ?? 0}</td>
                     <td>{formatDate(question.createdAt)}</td>
                     <td>
                       <Button type="button" variant="secondary" className="btn-sm" onClick={() => startEdit(question)}>
@@ -302,7 +304,7 @@ export default function AdminQuestions() {
                   </tr>
                   {editingId === question.id ? (
                     <tr>
-                      <td colSpan="7">
+                      <td colSpan="8">
                         <form onSubmit={handleSaveEdit} style={{ display: 'grid', gap: 'var(--space-md)', padding: 'var(--space-md) 0' }}>
                           <input className="form-input" value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} required />
                           <textarea className="form-input" rows={4} placeholder="Problem statement" value={edit.description} onChange={(e) => setEdit({ ...edit, description: e.target.value })} />
@@ -316,13 +318,13 @@ export default function AdminQuestions() {
                           </select>
                           <Button type="submit" variant="primary" disabled={saving}>{saving ? 'Saving…' : 'Save question'}</Button>
                         </form>
-                        <TestCasePanel questionId={question.id} onChanged={load} />
+                        <TestCasePanel questionId={question.id} totalPoints={question.totalPoints} onChanged={load} />
                       </td>
                     </tr>
                   ) : null}
                 </Fragment>
               )) : (
-                <tr><td colSpan="7" style={{ textAlign: 'center', padding: 'var(--space-xl)' }}>No questions found.</td></tr>
+                <tr><td colSpan="8" style={{ textAlign: 'center', padding: 'var(--space-xl)' }}>No questions found.</td></tr>
               )}
             </tbody>
           </table>

@@ -15,6 +15,8 @@ const PARTICIPANT_STATUSES = Object.freeze({
   REGISTERED: 'registered',
   STARTED: 'started',
   COMPLETED: 'completed',
+  REMOVED: 'removed',
+  EXITED: 'exited',
 });
 
 /**
@@ -127,8 +129,19 @@ function canRegister(effectiveStatus) {
   return effectiveStatus === STATUSES.SCHEDULED || effectiveStatus === STATUSES.RUNNING;
 }
 
+function isParticipantClosed(participant) {
+  if (!participant) {
+    return false;
+  }
+  return participant.status === PARTICIPANT_STATUSES.REMOVED
+    || participant.status === PARTICIPANT_STATUSES.EXITED;
+}
+
 function canEnter(effectiveStatus, participant) {
-  return effectiveStatus === STATUSES.RUNNING && Boolean(participant);
+  if (!participant || isParticipantClosed(participant)) {
+    return false;
+  }
+  return effectiveStatus === STATUSES.RUNNING;
 }
 
 function allowedAdminActions(effectiveStatus, storedStatus) {
@@ -158,6 +171,20 @@ function editableFields(effectiveStatus, storedStatus) {
 }
 
 function eligibilityForStudent(effectiveStatus, participant) {
+  if (participant && participant.status === PARTICIPANT_STATUSES.REMOVED) {
+    return {
+      canRegister: false,
+      canEnter: false,
+      reason: 'You have been removed from this contest.',
+    };
+  }
+  if (participant && participant.status === PARTICIPANT_STATUSES.EXITED) {
+    return {
+      canRegister: false,
+      canEnter: false,
+      reason: 'Your contest session has ended.',
+    };
+  }
   if (participant) {
     if (effectiveStatus === STATUSES.RUNNING) {
       return { canRegister: false, canEnter: true, reason: null };
@@ -221,6 +248,16 @@ function arenaDeniedError(effectiveStatus, participant) {
       code: 'REGISTRATION_REQUIRED',
     });
   }
+  if (participant.status === PARTICIPANT_STATUSES.REMOVED) {
+    return new AppError('You have been removed from this contest.', 403, {
+      code: 'PARTICIPANT_REMOVED',
+    });
+  }
+  if (participant.status === PARTICIPANT_STATUSES.EXITED) {
+    return new AppError('Your contest session has ended.', 403, {
+      code: 'SESSION_ENDED',
+    });
+  }
   if (effectiveStatus === STATUSES.SCHEDULED) {
     return new AppError('Contest has not started yet.', 403, {
       code: 'CONTEST_NOT_STARTED',
@@ -243,6 +280,16 @@ function executionDeniedError(effectiveStatus, participant) {
   if (!participant) {
     return new AppError('You must register for this contest first.', 403, {
       code: 'REGISTRATION_REQUIRED',
+    });
+  }
+  if (participant.status === PARTICIPANT_STATUSES.REMOVED) {
+    return new AppError('You have been removed from this contest.', 403, {
+      code: 'PARTICIPANT_REMOVED',
+    });
+  }
+  if (participant.status === PARTICIPANT_STATUSES.EXITED) {
+    return new AppError('Your contest session has ended.', 409, {
+      code: 'SESSION_ENDED',
     });
   }
   if (effectiveStatus === STATUSES.SCHEDULED) {
@@ -275,6 +322,7 @@ module.exports = {
   remainingSeconds,
   startsInSeconds,
   assertAdminTransition,
+  isParticipantClosed,
   canRegister,
   canEnter,
   allowedAdminActions,

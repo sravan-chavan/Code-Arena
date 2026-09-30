@@ -313,7 +313,7 @@ describe('Job processor', () => {
     assert.equal(result.status, EXECUTION_STATUS.WRONG_ANSWER);
   });
 
-  it('stops at the first failing test case and publishes the completed payload', async () => {
+  it('evaluates every test case and publishes the completed payload', async () => {
     const tokens = [];
     const published = [];
     const message = envelope({
@@ -321,8 +321,9 @@ describe('Job processor', () => {
       sourceCode: 'print(input())',
       languageId: 71,
       testCases: [
-        { stdin: 'ok', expectedOutput: 'ok' },
-        { stdin: 'fail', expectedOutput: 'expected' },
+        { stdin: 'ok', expectedOutput: 'ok', points: 10 },
+        { stdin: 'fail', expectedOutput: 'expected', points: 20 },
+        { stdin: 'ok2', expectedOutput: 'ok2', points: 30 },
       ],
     });
     const result = await processJob(message, {
@@ -352,11 +353,14 @@ describe('Job processor', () => {
       },
     });
     assert.equal(result.status, EXECUTION_STATUS.WRONG_ANSWER);
-    assert.equal(result.testsPassed, 1);
-    assert.equal(result.testsTotal, 2);
-    assert.deepEqual(tokens, ['ok', 'fail']);
+    assert.equal(result.testsPassed, 2);
+    assert.equal(result.testsTotal, 3);
+    assert.equal(result.score, 40);
+    assert.deepEqual(tokens, ['ok', 'fail', 'ok2']);
     assert.equal(published.length, 1);
     assert.equal(published[0].status, EXECUTION_STATUS.WRONG_ANSWER);
+    assert.equal(published[0].score, 40);
+    assert.equal(published[0].testResults.length, 3);
   });
 
   it('accepts optional testCases on the execution job contract', () => {

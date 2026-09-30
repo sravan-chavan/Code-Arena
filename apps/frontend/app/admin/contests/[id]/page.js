@@ -18,7 +18,11 @@ import {
   fetchAdminContest,
   fetchAdminParticipants,
   fetchAdminQuestions,
+  fetchAdminRanking,
+  fetchAdminContestSubmissions,
+  fetchAdminViolations,
   questionContests,
+  removeAdminParticipant,
   reorderAdminQuestions,
   scheduleAdminContest,
   updateAdminContest,
@@ -40,7 +44,7 @@ const emptyQuestion = {
   hiddenOutput: '',
 };
 
-const TABS = ['overview', 'problems', 'participants', 'lifecycle'];
+const TABS = ['overview', 'problems', 'participants', 'ranking', 'submissions', 'lifecycle'];
 const LIBRARY_FILTERS = [
   { id: 'all', label: 'All' },
   { id: 'unassigned', label: 'Unassigned' },
@@ -65,6 +69,9 @@ export default function AdminContestDetail() {
   const [contest, setContest] = useState(null);
   const [questions, setQuestions] = useState([]);
   const [participants, setParticipants] = useState([]);
+  const [ranking, setRanking] = useState([]);
+  const [submissions, setSubmissions] = useState([]);
+  const [violations, setViolations] = useState([]);
   const [form, setForm] = useState(emptyQuestion);
   const [library, setLibrary] = useState([]);
   const [showLibrary, setShowLibrary] = useState(false);
@@ -83,15 +90,21 @@ export default function AdminContestDetail() {
   const load = useCallback(async () => {
     if (!id) return;
     setError('');
-    const [nextContest, nextQuestions, nextParticipants, nextLibrary] = await Promise.all([
+    const [nextContest, nextQuestions, nextParticipants, nextLibrary, nextRanking, nextSubmissions, nextViolations] = await Promise.all([
       fetchAdminContest(id),
       fetchAdminQuestions(id),
       fetchAdminParticipants(id),
       fetchAdminQuestions(),
+      fetchAdminRanking(id),
+      fetchAdminContestSubmissions(id),
+      fetchAdminViolations(id),
     ]);
     setContest(nextContest);
     setQuestions(nextQuestions);
     setParticipants(nextParticipants);
+    setRanking(nextRanking);
+    setSubmissions(nextSubmissions);
+    setViolations(nextViolations);
     setLibrary(nextLibrary);
     setEdit({
       title: nextContest.title || '',
@@ -329,6 +342,8 @@ export default function AdminContestDetail() {
             <dd>{contest.durationMinutes} minutes</dd>
             <dt style={{ color: 'var(--text-secondary)' }}>Problems</dt>
             <dd>{contest.questionCount ?? questions.length}</dd>
+            <dt style={{ color: 'var(--text-secondary)' }}>Contest points</dt>
+            <dd>{contest.totalPoints ?? 0}</dd>
             <dt style={{ color: 'var(--text-secondary)' }}>Participants</dt>
             <dd>{contest.participantCount ?? participants.length}</dd>
             <dt style={{ color: 'var(--text-secondary)' }}>Server time</dt>
@@ -348,7 +363,7 @@ export default function AdminContestDetail() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 'var(--space-sm)' }}>
                       <div>
                         <strong>{index + 1}. {question.title}</strong>
-                        <span style={{ marginLeft: 8, color: 'var(--text-secondary)' }}>{question.difficulty} · {question.testCases?.length || 0} tests</span>
+                        <span style={{ marginLeft: 8, color: 'var(--text-secondary)' }}>{question.difficulty} · {question.testCases?.length || 0} tests · {question.totalPoints ?? 0} pts</span>
                         <div style={{ fontFamily: 'var(--font-code)', fontSize: '0.7rem', color: 'var(--text-muted)' }}>{question.id}</div>
                       </div>
                       <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
@@ -391,7 +406,7 @@ export default function AdminContestDetail() {
                           <Button type="submit" variant="primary" disabled={saving}>{saving ? 'Saving…' : 'Save question'}</Button>
                         </form>
                         <div style={{ marginTop: 'var(--space-md)' }}>
-                          <TestCasePanel questionId={question.id} onChanged={load} />
+                          <TestCasePanel questionId={question.id} totalPoints={question.totalPoints} onChanged={load} />
                         </div>
                       </>
                     ) : null}
@@ -522,25 +537,147 @@ export default function AdminContestDetail() {
       ) : null}
 
       {tab === 'participants' ? (
+        <>
+          <Card>
+            <h2 className="card-title" style={{ marginBottom: 'var(--space-md)' }}>Participants</h2>
+            {participants.length === 0 ? (
+              <p style={{ color: 'var(--text-secondary)' }}>No registered students yet.</p>
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Email</th>
+                    <th>Status</th>
+                    <th>Score</th>
+                    <th>Penalty</th>
+                    <th>Solved</th>
+                    <th>Tab switches</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {participants.map((participant) => (
+                    <tr key={participant.id}>
+                      <td>{participant.email}</td>
+                      <td><Badge status={participant.status} /></td>
+                      <td>{participant.score} / {participant.possibleScore}</td>
+                      <td>{participant.penalty}</td>
+                      <td>{participant.solvedCount}</td>
+                      <td>{participant.tabSwitchCount}</td>
+                      <td>
+                        {participant.status !== 'removed' ? (
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            className="btn-sm"
+                            disabled={saving}
+                            onClick={() => runAction(
+                              () => removeAdminParticipant(id, participant.id),
+                              `Removed ${participant.email}.`,
+                            )}
+                          >
+                            Remove student
+                          </Button>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Card>
+          <Card>
+            <h2 className="card-title" style={{ marginBottom: 'var(--space-md)' }}>Tab-switch events</h2>
+            {violations.length === 0 ? (
+              <p style={{ color: 'var(--text-secondary)' }}>No detected visibility violations.</p>
+            ) : (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Participant</th>
+                    <th>Question</th>
+                    <th>Type</th>
+                    <th>#</th>
+                    <th>When</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {violations.map((row) => (
+                    <tr key={row.id}>
+                      <td>{row.email}</td>
+                      <td style={{ fontFamily: 'var(--font-code)', fontSize: '0.75rem' }}>{row.questionId || '—'}</td>
+                      <td>{row.type}</td>
+                      <td>{row.sequence}</td>
+                      <td>{formatDateTime(row.occurredAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Card>
+        </>
+      ) : null}
+
+      {tab === 'ranking' ? (
         <Card>
-          <h2 className="card-title" style={{ marginBottom: 'var(--space-md)' }}>Participants</h2>
-          {participants.length === 0 ? (
-            <p style={{ color: 'var(--text-secondary)' }}>No registered students yet.</p>
+          <h2 className="card-title" style={{ marginBottom: 'var(--space-md)' }}>Ranking</h2>
+          {ranking.length === 0 ? (
+            <p style={{ color: 'var(--text-secondary)' }}>No participants yet.</p>
           ) : (
             <table className="data-table">
               <thead>
                 <tr>
+                  <th>Rank</th>
                   <th>Email</th>
+                  <th>Score</th>
+                  <th>Penalty</th>
+                  <th>Solved</th>
                   <th>Status</th>
-                  <th>Registered</th>
                 </tr>
               </thead>
               <tbody>
-                {participants.map((participant) => (
-                  <tr key={participant.id}>
-                    <td>{participant.email}</td>
-                    <td><Badge status={participant.status} /></td>
-                    <td>{formatDateTime(participant.registeredAt)}</td>
+                {ranking.map((row) => (
+                  <tr key={row.participantId}>
+                    <td>{row.rank}</td>
+                    <td>{row.email}</td>
+                    <td>{row.score} / {row.possibleScore}</td>
+                    <td>{row.penalty}</td>
+                    <td>{row.solvedCount}</td>
+                    <td><Badge status={row.status} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+      ) : null}
+
+      {tab === 'submissions' ? (
+        <Card>
+          <h2 className="card-title" style={{ marginBottom: 'var(--space-md)' }}>Submissions</h2>
+          {submissions.length === 0 ? (
+            <p style={{ color: 'var(--text-secondary)' }}>No contest submissions yet.</p>
+          ) : (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>When</th>
+                  <th>Question</th>
+                  <th>Kind</th>
+                  <th>Status</th>
+                  <th>Score</th>
+                  <th>Tests</th>
+                </tr>
+              </thead>
+              <tbody>
+                {submissions.map((row) => (
+                  <tr key={row.id}>
+                    <td>{formatDateTime(row.createdAt)}</td>
+                    <td style={{ fontFamily: 'var(--font-code)', fontSize: '0.75rem' }}>{row.questionId}</td>
+                    <td>{row.kind}</td>
+                    <td>{row.status}</td>
+                    <td>{row.score}</td>
+                    <td>{row.testsPassed ?? 0}/{row.testsTotal ?? 0}</td>
                   </tr>
                 ))}
               </tbody>

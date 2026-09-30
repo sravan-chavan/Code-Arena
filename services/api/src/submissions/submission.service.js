@@ -1,10 +1,15 @@
 const { publish, MESSAGE_TYPES, isMessagingReady } = require('../messaging');
 const AppError = require('../errors/AppError');
 const contestService = require('../contests/contest.service');
+const sessionService = require('../contests/session.service');
+const evaluationService = require('../contests/evaluation.service');
+const rankingService = require('../contests/ranking.service');
 const submissionRepository = require('../repositories/submission.repository');
 const questionService = require('../contests/question.service');
 const { getLanguageBySlug } = require('../config/languages');
 const { assertUuid } = require('../utils/input');
+const { withTransaction } = require('../db/transaction');
+const { sumTestCasePoints } = require('../contests/scoring');
 
 function selectTestCases(testCases, kind) {
   if (kind === 'run') {
@@ -36,6 +41,7 @@ async function enqueueExecution(user, body, { practice }) {
   let question;
   let testCases;
   let contestId = null;
+  let participantId = null;
 
   if (practice) {
     ({ question, testCases } = await questionService.getPracticeQuestionForExecution(body.questionId));
@@ -45,8 +51,9 @@ async function enqueueExecution(user, body, { practice }) {
       throw new AppError('contestId is required', 400, { code: 'VALIDATION_ERROR' });
     }
     assertUuid(body.contestId, 'contestId');
-    await contestService.assertExecutionAccess(user, question, body.contestId);
+    const access = await contestService.assertExecutionAccess(user, question, body.contestId);
     contestId = body.contestId;
+    participantId = access && access.participant ? access.participant.id : null;
   }
 
   const selected = selectTestCases(testCases, kind);
@@ -60,6 +67,7 @@ async function enqueueExecution(user, body, { practice }) {
   const submission = await submissionRepository.create({
     userId: user.id,
     contestId,
+    participantId,
     questionId: question.id,
     languageSlug: language.slug,
     languageId: language.judge0Id,
@@ -68,21 +76,34 @@ async function enqueueExecution(user, body, { practice }) {
     testsTotal: selected.length,
   });
 
+  console.log(
+    `[API] Submission created submissionId=${submission.id} contestId=${contestId || 'practice'} participantId=${participantId || 'none'} questionId=${question.id} kind=${kind}`,
+  );
+
   try {
     await publish({
       type: MESSAGE_TYPES.EXECUTION_REQUESTED,
       payload: {
         jobId: submission.id,
+        contestId,
+        participantId,
+        questionId: question.id,
+        kind,
         sourceCode: body.sourceCode,
         languageId: language.judge0Id,
         cpuTimeLimit: question.timeLimitSeconds,
         memoryLimit: question.memoryLimitMb * 1024,
-        testCases: selected.map((testCase) => ({
+        testCases: selected.map((testCase, index) => ({
+          id: testCase.id,
           stdin: testCase.stdin,
           expectedOutput: testCase.expectedOutput,
+          points: testCase.points,
+          isHidden: Boolean(testCase.isHidden),
+          sortOrder: Number.isInteger(testCase.sortOrder) ? testCase.sortOrder : index,
         })),
       },
     });
+    console.log(`[API] Execution requested submissionId=${submission.id} questionId=${question.id}`);
   } catch (err) {
     if (err && (err.code === 'RABBITMQ_NOT_CONNECTED' || err.code === 'RABBITMQ_UNAVAILABLE')) {
       throw new AppError('Execution queue is unavailable', 503, { code: err.code });
@@ -93,17 +114,36 @@ async function enqueueExecution(user, body, { practice }) {
   return submissionRepository.toPublic(submission);
 }
 
+async function withResults(submission, { includeHiddenResults = false } = {}) {
+  const loaded = await submissionRepository.attachTestResults(submission);
+  return submissionRepository.toPublic(loaded, { includeHiddenResults });
+}
+
 async function getOwnedSubmission(user, submissionId) {
   const submission = await submissionRepository.findById(submissionId);
   if (!submission || submission.userId !== user.id) {
     throw new AppError('Submission not found', 404, { code: 'NOT_FOUND' });
   }
-  return submissionRepository.toPublic(submission);
+  return withResults(submission);
 }
 
 async function listOwnedSubmissions(user) {
   const rows = await submissionRepository.listByUser(user.id);
-  return rows.map(submissionRepository.toPublic);
+  return Promise.all(rows.map((row) => withResults(row)));
+}
+
+async function listOwnedContestSubmissions(user, contestId) {
+  assertUuid(contestId, 'contestId');
+  await sessionService.getSession(user, contestId);
+  const rows = await submissionRepository.listByContestAndUser(contestId, user.id);
+  return Promise.all(rows.map((row) => withResults(row)));
+}
+
+async function listAdminContestSubmissions(contestId) {
+  assertUuid(contestId, 'contestId');
+  const rows = await submissionRepository.listByContest(contestId);
+  const loaded = await Promise.all(rows.map((row) => submissionRepository.attachTestResults(row)));
+  return loaded.map((row) => submissionRepository.toAdmin(row));
 }
 
 async function getOwnedPracticeSubmission(user, submissionId) {
@@ -119,12 +159,22 @@ async function getOwnedPracticeSubmission(user, submissionId) {
     }
     throw err;
   }
-  return submissionRepository.toPublic(submission);
+  return withResults(submission);
 }
 
 async function listOwnedPracticeSubmissions(user) {
   const rows = await submissionRepository.listByUserPractice(user.id);
-  return rows.map(submissionRepository.toPublic);
+  return Promise.all(rows.map((row) => withResults(row)));
+}
+
+function scoreFromResults(payload, submission) {
+  if (Array.isArray(payload.testResults) && payload.testResults.length > 0) {
+    return payload.testResults.reduce((sum, row) => sum + Number(row.pointsEarned || 0), 0);
+  }
+  if (payload.score !== undefined && payload.score !== null) {
+    return Number(payload.score);
+  }
+  return Number(submission.score || 0);
 }
 
 async function applyExecutionResult(payload) {
@@ -136,7 +186,53 @@ async function applyExecutionResult(payload) {
     console.log(`[API] Execution result ignored (unknown jobId=${payload.jobId})`);
     return null;
   }
-  return submissionRepository.applyResult(payload.jobId, payload);
+
+  return withTransaction(async (client) => {
+    const score = scoreFromResults(payload, existing);
+    const updated = await submissionRepository.applyResult(payload.jobId, {
+      ...payload,
+      score,
+    }, client);
+    if (Array.isArray(payload.testResults)) {
+      updated.testResults = await submissionRepository.replaceTestResults(
+        updated.id,
+        payload.testResults,
+        client,
+      );
+    }
+    console.log(
+      `[API] Evaluation completed submissionId=${updated.id} status=${updated.status} score=${updated.score}`,
+    );
+
+    if (updated.contestId && updated.participantId && updated.kind === 'submit') {
+      const contestRepository = require('../repositories/contest.repository');
+      const participantRepository = require('../repositories/participant.repository');
+      const contest = await contestRepository.findById(updated.contestId, client);
+      const participant = await participantRepository.findById(updated.participantId, client);
+      if (contest && participant) {
+        await evaluationService.applyQuestionScore(
+          contest,
+          participant,
+          updated.questionId,
+          updated.score,
+          client,
+        );
+        console.log(
+          `[API] Score calculated contestId=${contest.id} participantId=${participant.id} questionId=${updated.questionId} submissionId=${updated.id}`,
+        );
+      }
+    }
+    return updated;
+  });
+}
+
+async function getStudentRanking(user, contestId) {
+  await sessionService.getSession(user, contestId);
+  return rankingService.rankingForContest(contestId, { includeEmail: false });
+}
+
+async function getAdminRanking(contestId) {
+  return rankingService.rankingForContest(contestId, { includeEmail: true });
 }
 
 module.exports = {
@@ -144,7 +240,13 @@ module.exports = {
   createPracticeAndEnqueue,
   getOwnedSubmission,
   listOwnedSubmissions,
+  listOwnedContestSubmissions,
+  listAdminContestSubmissions,
   getOwnedPracticeSubmission,
   listOwnedPracticeSubmissions,
   applyExecutionResult,
+  getStudentRanking,
+  getAdminRanking,
+  selectTestCases,
+  sumTestCasePoints,
 };

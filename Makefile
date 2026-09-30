@@ -8,7 +8,7 @@ include common.mk
 	docker-logs-codearena docker-clean-codearena \
 	docker-logs-api-codearena docker-logs-worker-codearena \
 	docker-logs-frontend-codearena \
-	test test-codearena db-test-codearena db-migrate-codearena \
+	test test-codearena db-test-codearena db-migrate-codearena e2e-codearena \
 	lint format
 
 help: ## Show available targets
@@ -89,6 +89,9 @@ db-test-codearena: ## Run PostgreSQL and RabbitMQ integration tests (requires th
 
 db-migrate-codearena: ensure-env ## Apply pending API migrations in the running api container
 	$(COMPOSE) exec api node src/db/migrate.js
+
+e2e-codearena: ## Browser E2E against Nginx :8080 (requires docker-up-codearena)
+	@cd apps/frontend && npx playwright test
 
 lint: ## Run lint (none defined in Milestone 0)
 	@echo "No lint targets defined yet (Milestone 0 foundation)."
