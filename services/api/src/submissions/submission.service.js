@@ -1,6 +1,6 @@
 const { publish, MESSAGE_TYPES, isMessagingReady } = require('../messaging');
 const AppError = require('../errors/AppError');
-const contestRepository = require('../repositories/contest.repository');
+const contestService = require('../contests/contest.service');
 const submissionRepository = require('../repositories/submission.repository');
 const questionService = require('../contests/question.service');
 const { getLanguageBySlug } = require('../config/languages');
@@ -41,14 +41,12 @@ async function enqueueExecution(user, body, { practice }) {
     ({ question, testCases } = await questionService.getPracticeQuestionForExecution(body.questionId));
   } else {
     ({ question, testCases } = await questionService.getQuestionForExecution(body.questionId));
-    const contest = await contestRepository.findById(question.contestId);
-    if (!contest || contest.status !== 'running') {
-      throw new AppError('Contest is not open for execution', 409, { code: 'CONTEST_NOT_RUNNING' });
+    if (!body.contestId) {
+      throw new AppError('contestId is required', 400, { code: 'VALIDATION_ERROR' });
     }
-    if (body.contestId && body.contestId !== question.contestId) {
-      throw new AppError('Question does not belong to this contest', 400, { code: 'VALIDATION_ERROR' });
-    }
-    contestId = question.contestId;
+    assertUuid(body.contestId, 'contestId');
+    await contestService.assertExecutionAccess(user, question, body.contestId);
+    contestId = body.contestId;
   }
 
   const selected = selectTestCases(testCases, kind);

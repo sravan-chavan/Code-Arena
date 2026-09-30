@@ -1,17 +1,38 @@
 'use client';
+import { useEffect, useState } from 'react';
 import { useAuth } from '@/lib/AuthContext';
 import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
-import { metrics, contests, submissions, systemLogs, formatTime, formatTimestamp } from '@/lib/mockData';
+import { metrics, submissions, systemLogs, formatTimestamp } from '@/lib/mockData';
+import { fetchAdminContests } from '@/lib/contestsApi';
+import { ApiError } from '@/lib/apiClient';
+import ContestTimer from '@/components/ui/ContestTimer';
 import { Users, Activity, CheckCircle, Clock, Server } from 'lucide-react';
+import Link from 'next/link';
 
 export default function AdminDashboard() {
   const { user, application, applicationError } = useAuth();
-  const activeContests = contests.filter(c => c.status === 'running');
+  const [contests, setContests] = useState([]);
+  const [contestError, setContestError] = useState('');
   const recentLogs = systemLogs.slice(0, 5);
   const recentSubmissions = submissions.slice(0, 5);
   const dashboard = application?.dashboard;
   const applicationName = application?.me?.application?.name;
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const rows = await fetchAdminContests();
+        if (!cancelled) setContests(rows);
+      } catch (err) {
+        if (!cancelled) setContestError(err instanceof ApiError ? err.message : 'Unable to load contests.');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const activeContests = contests.filter((contest) => contest.status === 'running');
 
   return (
     <div>
@@ -36,7 +57,7 @@ export default function AdminDashboard() {
       </Card>
 
       <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 'var(--space-md)' }}>
-        Contest, worker, and submission figures below are mock/future data — not returned by the current API.
+        Active contests below are live API data. Worker, queue, and submission figures remain mock/future data.
       </p>
 
       <div className="stats-grid">
@@ -82,26 +103,22 @@ export default function AdminDashboard() {
               </h2>
             </div>
             
+            {contestError ? <p style={{ color: 'var(--accent-rose)' }}>{contestError}</p> : null}
             {activeContests.length > 0 ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
-                {activeContests.map(contest => (
+                {activeContests.map((contest) => (
                   <div key={contest.id} style={{ padding: 'var(--space-md)', background: 'var(--bg-secondary)', border: '1px solid var(--border-default)', borderRadius: 'var(--radius-md)' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 'var(--space-sm)' }}>
                       <div>
-                        <h3 style={{ fontWeight: 600, color: 'var(--accent-cyan)' }}>{contest.title}</h3>
-                        <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{contest.participantIds.length} Participants</p>
+                        <Link href={`/admin/contests/${contest.id}`}>
+                          <h3 style={{ fontWeight: 600, color: 'var(--accent-cyan)' }}>{contest.title}</h3>
+                        </Link>
+                        <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{contest.participantCount ?? 0} Participants · {contest.questionCount ?? 0} Problems</p>
                       </div>
                       <Badge status={contest.status} />
                     </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem' }}>
-                      <div style={{ color: 'var(--text-secondary)' }}>
-                        Time Remaining: <span style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-code)' }}>{formatTime(contest.remainingTime)}</span>
-                      </div>
-                      <div style={{ width: '30%', background: 'var(--bg-primary)', borderRadius: 'var(--radius-full)', height: '6px' }}>
-                        <div 
-                          style={{ background: 'var(--accent-cyan)', height: '100%', borderRadius: 'var(--radius-full)', width: `${(1 - contest.remainingTime / (contest.duration * 60)) * 100}%` }}
-                        ></div>
-                      </div>
+                    <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                      <ContestTimer contest={contest} />
                     </div>
                   </div>
                 ))}

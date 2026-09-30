@@ -1,7 +1,7 @@
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
-const { requirePostgres, uniqueEmail } = require('./helpers');
+const { requirePostgres, uniqueEmail, restoreOpenEndedTestContest } = require('./helpers');
 const { closePool } = require('../../src/db/pool');
 const { query } = require('../../src/db/query');
 const { runMigrations } = require('../../src/db/migrate');
@@ -21,6 +21,7 @@ describe('Practice APIs (PostgreSQL)', () => {
   before(async () => {
     await requirePostgres();
     await runMigrations();
+    await restoreOpenEndedTestContest();
     app = createApp();
     studentEmail = uniqueEmail('practice-student');
 
@@ -53,12 +54,16 @@ describe('Practice APIs (PostgreSQL)', () => {
     assert.deepEqual(titles, ['Hello CodeArena', 'Sum of Two Numbers', 'Reverse String']);
 
     const contestQuestions = await query(
-      `SELECT COUNT(*)::int AS n
+      `SELECT q.title
        FROM questions q
-       INNER JOIN contests c ON c.id = q.contest_id
+       INNER JOIN contest_questions cq ON cq.question_id = q.id
+       INNER JOIN contests c ON c.id = cq.contest_id
        WHERE c.is_development_seed = TRUE AND c.title = 'Test' AND q.is_practice = FALSE`,
     );
-    assert.equal(contestQuestions.rows[0].n, 3);
+    const contestTitles = contestQuestions.rows.map((row) => row.title);
+    assert.ok(contestTitles.includes('Hello World'));
+    assert.ok(contestTitles.includes('Sum of Two Numbers'));
+    assert.ok(contestTitles.includes('Reverse String'));
 
     const second = await runMigrations();
     assert.ok(second.skipped.includes('008'));
@@ -117,13 +122,30 @@ describe('Practice APIs (PostgreSQL)', () => {
     const testContest = contests.body.data.contests.find((contest) => contest.title === 'Test');
     assert.ok(testContest);
 
+    await request(app)
+      .post(`/student/contests/${testContest.id}/register`)
+      .set('Authorization', `Bearer ${studentToken}`)
+      .expect(201);
+
     const questions = await request(app)
       .get(`/student/contests/${testContest.id}/questions`)
       .set('Authorization', `Bearer ${studentToken}`)
       .expect(200);
-    assert.equal(questions.body.data.questions.length, 3);
+    const expectedCount = await query(
+      `SELECT COUNT(*)::int AS n
+       FROM contest_questions cq
+       INNER JOIN questions q ON q.id = cq.question_id
+       WHERE cq.contest_id = $1 AND q.is_practice = FALSE`,
+      [testContest.id],
+    );
+    assert.equal(questions.body.data.questions.length, expectedCount.rows[0].n);
+    assert.ok(questions.body.data.questions.length >= 3);
     assert.equal(
       questions.body.data.questions.every((question) => question.id !== problemId),
+      true,
+    );
+    assert.equal(
+      questions.body.data.questions.every((question) => question.isPractice !== true),
       true,
     );
   });

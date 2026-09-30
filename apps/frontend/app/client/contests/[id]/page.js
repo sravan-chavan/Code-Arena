@@ -1,228 +1,140 @@
 'use client';
-import { useState, useEffect } from 'react';
-import { useParams, useRouter } from 'next/navigation';
-import { formatTime } from '@/lib/mockData';
-import Card from '@/components/ui/Card';
-import Button from '@/components/ui/Button';
-import Badge from '@/components/ui/Badge';
-import Editor from '@/components/ui/Editor';
-import { createExecution, fetchLanguages, fetchStudentContest, fetchStudentQuestions, formatStatus, pollSubmission } from '@/lib/contestsApi';
-import { ApiError } from '@/lib/apiClient';
-import { Clock, Code2, Play, UploadCloud, ChevronLeft, CheckCircle, XCircle } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { useParams } from 'next/navigation';
 import Link from 'next/link';
+import Card from '@/components/ui/Card';
+import Badge from '@/components/ui/Badge';
+import Button from '@/components/ui/Button';
+import ContestTimer from '@/components/ui/ContestTimer';
+import { formatDateTime } from '@/lib/contestTime';
+import { fetchStudentContest, fetchStudentQuestions, registerForContest } from '@/lib/contestsApi';
+import { ApiError } from '@/lib/apiClient';
+import { ChevronLeft } from 'lucide-react';
 
-export default function ContestArena() {
+export default function StudentContestDetail() {
   const { id } = useParams();
-  const router = useRouter();
   const [contest, setContest] = useState(null);
   const [questions, setQuestions] = useState([]);
-  const [languages, setLanguages] = useState([]);
-  const [activeQuestionIndex, setActiveQuestionIndex] = useState(0);
-  const [language, setLanguage] = useState('python');
-  const [code, setCode] = useState('');
-  const [output, setOutput] = useState('');
-  const [isExecuting, setIsExecuting] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submissionResult, setSubmissionResult] = useState(null);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [registering, setRegistering] = useState(false);
+
+  const load = useCallback(async () => {
+    const nextContest = await fetchStudentContest(id);
+    setContest(nextContest);
+    if (nextContest.canEnter) {
+      try {
+        setQuestions(await fetchStudentQuestions(id));
+      } catch (err) {
+        setQuestions([]);
+        setError(err instanceof ApiError ? err.message : 'Unable to load problems.');
+      }
+    } else {
+      setQuestions([]);
+    }
+  }, [id]);
 
   useEffect(() => {
+    if (!id) return undefined;
     let cancelled = false;
     (async () => {
       try {
-        const [nextContest, nextQuestions, nextLanguages] = await Promise.all([
-          fetchStudentContest(id),
-          fetchStudentQuestions(id),
-          fetchLanguages(),
-        ]);
-        if (cancelled) return;
-        if (!nextContest || nextContest.status !== 'running') {
-          router.push('/client/contests');
-          return;
-        }
-        setContest(nextContest);
-        setQuestions(nextQuestions);
-        setLanguages(nextLanguages);
-        const first = nextLanguages.find((item) => item.slug === 'python') || nextLanguages[0];
-        if (first) {
-          setLanguage(first.slug);
-          setCode(first.template || '');
-        }
+        await load();
       } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof ApiError ? err.message : 'Unable to load contest.');
-        }
+        if (!cancelled) setError(err instanceof ApiError ? err.message : 'Unable to load contest.');
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     })();
     return () => { cancelled = true; };
-  }, [id, router]);
+  }, [id, load]);
 
-  if (error) {
-    return <div style={{ padding: 'var(--space-xl)', color: 'var(--accent-rose)' }}>{error}</div>;
-  }
-  if (!contest || questions.length === 0) {
-    return <div style={{ padding: 'var(--space-xl)', textAlign: 'center', color: 'var(--accent-cyan)' }}>Loading Arena...</div>;
-  }
-
-  const activeQuestion = questions[activeQuestionIndex];
-  const remaining = contest.remainingTime == null ? contest.durationMinutes * 60 : contest.remainingTime;
-
-  function onLanguageChange(slug) {
-    setLanguage(slug);
-    const selected = languages.find((item) => item.slug === slug);
-    if (selected?.template) setCode(selected.template);
-  }
-
-  async function runKind(kind) {
-    const running = kind === 'run' ? setIsExecuting : setIsSubmitting;
-    running(true);
-    setSubmissionResult(null);
-    setOutput(kind === 'run' ? 'Running sample test case…' : 'Submitting to Judge0 via RabbitMQ…');
+  async function handleRegister() {
+    setRegistering(true);
+    setError('');
+    setSuccess('');
     try {
-      const created = await createExecution({
-        contestId: contest.id,
-        questionId: activeQuestion.id,
-        language,
-        sourceCode: code,
-        kind,
-      });
-      const result = await pollSubmission(created.id);
-      setSubmissionResult(result);
-      const lines = [
-        `Result: ${formatStatus(result.status)}`,
-        `Tests: ${result.testsPassed ?? 0} / ${result.testsTotal ?? 0}`,
-        result.executionTime ? `Time: ${result.executionTime}s` : null,
-        result.memoryKb ? `Memory: ${result.memoryKb} KB` : null,
-        result.stdout ? `\nstdout:\n${result.stdout}` : null,
-        result.stderr ? `\nstderr:\n${result.stderr}` : null,
-        result.compileOutput ? `\ncompile:\n${result.compileOutput}` : null,
-      ].filter(Boolean);
-      setOutput(lines.join('\n'));
+      await registerForContest(id);
+      setSuccess('You are registered.');
+      await load();
     } catch (err) {
-      setOutput(err instanceof ApiError ? err.message : err.message || 'Execution failed.');
+      setError(err instanceof ApiError ? err.message : 'Unable to register.');
     } finally {
-      running(false);
+      setRegistering(false);
     }
   }
 
+  if (loading) return <p style={{ padding: 'var(--space-xl)' }}>Loading contest…</p>;
+  if (!contest) return <p style={{ padding: 'var(--space-xl)', color: 'var(--accent-rose)' }}>{error || 'Contest not found.'}</p>;
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 120px)' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-md)', background: 'var(--bg-card)', padding: 'var(--space-sm) var(--space-md)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-default)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-md)' }}>
-          <Link href="/client/contests" style={{ color: 'var(--text-secondary)' }}><ChevronLeft size={20} /></Link>
-          <div>
-            <h2 style={{ fontSize: '1.1rem', fontWeight: 700 }}>{contest.title}</h2>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{activeQuestion.title}</div>
-          </div>
+    <div className="space-y-6">
+      <Link href="/client/contests" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: 'var(--text-secondary)' }}>
+        <ChevronLeft size={16} /> All contests
+      </Link>
+      <div className="page-header">
+        <h1>{contest.title}</h1>
+        <p>{contest.description}</p>
+        <div style={{ display: 'flex', gap: 'var(--space-md)', alignItems: 'center', flexWrap: 'wrap' }}>
+          <Badge status={contest.status} />
+          {contest.registration ? <Badge status={contest.registration.status} /> : null}
+          <ContestTimer contest={contest} onExpired={load} />
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-xl)' }}>
-          <div style={{ display: 'flex', gap: 'var(--space-xs)' }}>
-            {questions.map((question, idx) => (
-              <button
-                key={question.id}
-                onClick={() => { setActiveQuestionIndex(idx); setSubmissionResult(null); setOutput(''); }}
-                style={{
-                  width: '32px', height: '32px', borderRadius: 'var(--radius-sm)',
-                  background: activeQuestionIndex === idx ? 'var(--accent-cyan)' : 'var(--bg-input)',
-                  color: activeQuestionIndex === idx ? 'var(--bg-primary)' : 'var(--text-primary)',
-                  fontWeight: 600, fontSize: '0.9rem', border: '1px solid var(--border-default)',
-                }}
-              >
-                {String.fromCharCode(65 + idx)}
-              </button>
+      </div>
+      {error ? <p style={{ color: 'var(--accent-rose)' }}>{error}</p> : null}
+      {success ? <p style={{ color: 'var(--accent-emerald)' }}>{success}</p> : null}
+
+      <Card>
+        <h2 className="card-title" style={{ marginBottom: 'var(--space-md)' }}>Timing</h2>
+        <p>Start: {formatDateTime(contest.startTime)}</p>
+        <p>End: {formatDateTime(contest.endTime)}</p>
+        <p>Duration: {contest.durationMinutes} minutes</p>
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Times shown in your local timezone. Contest state uses server time.</p>
+      </Card>
+
+      <Card>
+        <h2 className="card-title" style={{ marginBottom: 'var(--space-md)' }}>Registration</h2>
+        {contest.registration ? (
+          <p>You are {contest.registration.status} as of {formatDateTime(contest.registration.registeredAt)}.</p>
+        ) : (
+          <p>{contest.eligibilityReason || 'You are not registered.'}</p>
+        )}
+        <div style={{ display: 'flex', gap: 'var(--space-sm)', marginTop: 'var(--space-md)', flexWrap: 'wrap' }}>
+          {contest.canRegister ? (
+            <Button variant="primary" disabled={registering} onClick={handleRegister}>
+              {registering ? 'Registering…' : 'Register'}
+            </Button>
+          ) : null}
+          {contest.canEnter ? (
+            <Link href={`/client/contests/${contest.id}/arena`}>
+              <Button variant="primary">Enter Contest</Button>
+            </Link>
+          ) : null}
+        </div>
+      </Card>
+
+      <Card>
+        <h2 className="card-title" style={{ marginBottom: 'var(--space-md)' }}>Problems</h2>
+        {contest.canEnter && questions.length > 0 ? (
+          <ul style={{ display: 'grid', gap: 'var(--space-sm)' }}>
+            {questions.map((question, index) => (
+              <li key={question.id} style={{ padding: 'var(--space-sm)', background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)' }}>
+                <strong>{index + 1}. {question.title}</strong>
+                <span style={{ marginLeft: 8, color: 'var(--text-secondary)' }}>{question.difficulty}</span>
+              </li>
             ))}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(244, 63, 94, 0.1)', padding: '6px 16px', borderRadius: 'var(--radius-full)' }}>
-            <Clock size={16} style={{ color: 'var(--accent-rose)' }} />
-            <span style={{ fontFamily: 'var(--font-code)', fontWeight: 700, color: 'var(--accent-rose)' }}>{formatTime(remaining)}</span>
-          </div>
-        </div>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-md)', flex: 1, minHeight: 0 }}>
-        <Card style={{ overflowY: 'auto' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 'var(--space-md)' }}>
-            <h1 style={{ fontSize: '1.5rem', fontWeight: 700 }}>{String.fromCharCode(65 + activeQuestionIndex)}. {activeQuestion.title}</h1>
-            <Badge status={activeQuestion.difficulty} />
-          </div>
-          <div style={{ display: 'flex', gap: 'var(--space-md)', marginBottom: 'var(--space-lg)', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-            <span>Time Limit: {activeQuestion.timeLimitSeconds}s</span>
-            <span>Memory Limit: {activeQuestion.memoryLimitMb}MB</span>
-          </div>
-          <div style={{ marginBottom: 'var(--space-lg)', whiteSpace: 'pre-line' }}>{activeQuestion.description}</div>
-          <div style={{ marginBottom: 'var(--space-lg)' }}>
-            <h3 style={{ fontSize: '1rem', fontWeight: 600 }}>Input Format</h3>
-            <p style={{ color: 'var(--text-secondary)', whiteSpace: 'pre-line' }}>{activeQuestion.inputFormat}</p>
-          </div>
-          <div style={{ marginBottom: 'var(--space-lg)' }}>
-            <h3 style={{ fontSize: '1rem', fontWeight: 600 }}>Output Format</h3>
-            <p style={{ color: 'var(--text-secondary)', whiteSpace: 'pre-line' }}>{activeQuestion.outputFormat}</p>
-          </div>
-          <div style={{ marginBottom: 'var(--space-xl)' }}>
-            <h3 style={{ fontSize: '1rem', fontWeight: 600 }}>Constraints</h3>
-            <div style={{ background: 'var(--bg-input)', padding: 'var(--space-sm)', fontFamily: 'var(--font-code)', fontSize: '0.85rem' }}>{activeQuestion.constraints}</div>
-          </div>
-          <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-default)', borderRadius: 'var(--radius-md)' }}>
-            <div style={{ padding: 'var(--space-sm) var(--space-md)', fontWeight: 600, borderBottom: '1px solid var(--border-default)' }}>Sample Test Case</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
-              <div style={{ padding: 'var(--space-md)' }}>
-                <h4 style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Input</h4>
-                <div style={{ fontFamily: 'var(--font-code)', whiteSpace: 'pre-wrap' }}>{activeQuestion.sampleInput}</div>
-              </div>
-              <div style={{ padding: 'var(--space-md)' }}>
-                <h4 style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Output</h4>
-                <div style={{ fontFamily: 'var(--font-code)', whiteSpace: 'pre-wrap' }}>{activeQuestion.sampleOutput}</div>
-              </div>
-            </div>
-          </div>
-        </Card>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)', minHeight: 0 }}>
-          <Card style={{ flex: 2, display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: 'var(--space-sm) var(--space-md)', borderBottom: '1px solid var(--border-default)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-sm)' }}>
-                <Code2 size={16} />
-                <select className="form-select" value={language} onChange={(e) => onLanguageChange(e.target.value)}>
-                  {(languages.length ? languages : [{ slug: 'python', label: 'Python 3' }]).map((item) => (
-                    <option key={item.slug} value={item.slug}>{item.label}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            <div style={{ flex: 1, overflow: 'hidden', background: '#282c34' }}>
-              <Editor value={code} onChange={setCode} language={language} />
-            </div>
-          </Card>
-
-          <Card style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }}>
-            <div style={{ padding: 'var(--space-sm) var(--space-md)', borderBottom: '1px solid var(--border-default)', display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ fontWeight: 600 }}>Execution Console</span>
-              <div style={{ display: 'flex', gap: 'var(--space-sm)' }}>
-                <Button variant="secondary" className="btn-sm" onClick={() => runKind('run')} disabled={isExecuting || isSubmitting || !code.trim()}>
-                  <Play size={14} /> Run Sample
-                </Button>
-                <Button variant="success" className="btn-sm" onClick={() => runKind('submit')} disabled={isExecuting || isSubmitting || !code.trim()}>
-                  <UploadCloud size={14} /> Submit
-                </Button>
-              </div>
-            </div>
-            {submissionResult ? (
-              <div style={{ padding: 'var(--space-md)', display: 'flex', alignItems: 'center', gap: 'var(--space-sm)', background: submissionResult.status === 'ACCEPTED' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(244, 63, 94, 0.1)' }}>
-                {submissionResult.status === 'ACCEPTED' ? <CheckCircle size={24} color="var(--accent-emerald)" /> : <XCircle size={24} color="var(--accent-rose)" />}
-                <div>
-                  <div style={{ fontWeight: 700 }}>{formatStatus(submissionResult.status)}</div>
-                  <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                    Passed {submissionResult.testsPassed ?? 0} / {submissionResult.testsTotal ?? 0} tests
-                  </div>
-                </div>
-              </div>
-            ) : null}
-            <div style={{ flex: 1, padding: 'var(--space-md)', background: 'var(--bg-input)', overflowY: 'auto', fontFamily: 'var(--font-code)', fontSize: '0.85rem', whiteSpace: 'pre-wrap' }}>
-              {output || 'Output will appear here...'}
-            </div>
-          </Card>
-        </div>
-      </div>
+          </ul>
+        ) : (
+          <p style={{ color: 'var(--text-secondary)' }}>
+            {contest.status === 'scheduled'
+              ? 'Problems unlock when the contest starts.'
+              : contest.canEnter
+                ? 'No problems have been added yet.'
+                : `${contest.questionCount ?? 0} problem(s). Statements are hidden until you can enter the arena.`}
+          </p>
+        )}
+      </Card>
     </div>
   );
 }

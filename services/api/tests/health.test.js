@@ -18,7 +18,7 @@ describe('Health endpoints', () => {
     assert.equal(res.body.success, true);
     assert.equal(res.body.data.status, 'ok');
     assert.equal(res.body.data.service, 'api');
-    assert.equal(res.body.data.milestone, 8);
+    assert.equal(res.body.data.milestone, 9);
     assert.ok(res.headers['x-request-id']);
   });
 

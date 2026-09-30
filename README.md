@@ -366,6 +366,37 @@ Student practice endpoints (Bearer JWT + `STUDENT`):
 
 Migration `008` seeds three idempotent development practice problems: Hello CodeArena, Sum of Two Numbers, Reverse String. They are separate rows from the contest `Test` seed.
 
+**Milestone 9 — Contest Engine**
+
+Contest management extends the existing `contests` / `questions` tables. It does not add a second contest system or a second execution pipeline. Admin creates a **draft**, then **schedules** it. Effective status is computed from **API server time** and stored UTC `start_time` / `end_time`:
+
+```text
+DRAFT → SCHEDULED → RUNNING → ENDED
+          ↘ CANCELLED
+```
+
+`SCHEDULED → RUNNING` and `RUNNING → ENDED` happen from the clock (lazy-persisted on read/execute). Admin may `POST .../cancel` from draft or scheduled, and `POST .../end` while running. Invalid transitions return `409`.
+
+Students (`STUDENT` JWT only) register while the contest is **scheduled or running**. Duplicate registration is `409`. Arena questions and contest execution require: authenticated student, contest exists and is running, student is registered, and the question belongs to that contest. Practice execution is unchanged and still uses `POST /api/student/practice/executions`.
+
+The development `Test` contest stays a single open-ended running seed (`start_time` and `end_time` remain NULL). Students must register before entering its arena. Migration `009` does not create another Test contest.
+
+Question Library questions stay one row in `questions`. Contest membership is a many-to-many table `contest_questions` (migration `011`). `questions.contest_id` is dropped after backfill so membership cannot diverge.
+
+```text
+Practice:   is_practice = true, no contest_questions rows
+Unassigned: is_practice = false, no contest_questions rows
+Contest:    is_practice = false, one or more contest_questions rows
+```
+
+The same question can belong to multiple contests without copying the row. Contest-specific `sort_order` lives on `contest_questions`, not on `questions.sort_order`. Practice questions cannot be attached (API `409` plus a PostgreSQL trigger). Duplicate membership on the same contest is `409`.
+
+Admin creates unassigned questions with `POST /admin/questions` (omit `contestId`) and attaches with `POST /admin/contests/:id/questions/:questionId` or `POST /admin/contests/:id/questions/batch`. Editing a question (`PATCH /admin/questions/:questionId`) updates the shared row, so every contest that references it sees the new content. Test cases stay on `question_test_cases`; the last remaining test case cannot be deleted. There is no question-versioning system in M9: historical submissions keep their stored results and are not rewritten when tests change.
+
+Draft and scheduled contests can be edited (`PATCH /admin/contests/:id`), including timing when the window stays valid. Running contests may change title/description only. Ended and cancelled contests are immutable.
+
+Timestamps: PostgreSQL `TIMESTAMPTZ` and API bodies/responses are ISO-8601 UTC (`2026-09-30T15:00:00.000Z`). The UI converts to the browser locale (for example `8:30 PM IST`). Contest state never uses the browser clock; responses include `serverTime` for countdown display.
+
 ### Manual Judge0 execution
 
 Start CodeArena (`make docker-up-codearena`) and a Judge0 CE instance that the Worker can reach via `JUDGE0_URL`. Then publish one job through the API producer path:
@@ -427,14 +458,28 @@ Nginx already strips `/api`, so Express serves `/admin/...` and `/student/...`. 
 | `GET /api/admin/contests` | 200 | 403 | 401 |
 | `POST /api/admin/contests` | 201 | 403 | 401 |
 | `GET /api/admin/contests/:id` | 200 | 403 | 401 |
+| `PATCH /api/admin/contests/:id` | 200 | 403 | 401 |
+| `POST /api/admin/contests/:id/schedule` | 200 | 403 | 401 |
+| `POST /api/admin/contests/:id/cancel` | 200 | 403 | 401 |
+| `POST /api/admin/contests/:id/end` | 200 | 403 | 401 |
 | `GET /api/admin/contests/:id/questions` | 200 | 403 | 401 |
 | `POST /api/admin/contests/:id/questions` | 201 | 403 | 401 |
+| `POST /api/admin/contests/:id/questions/batch` | 200 | 403 | 401 |
+| `POST /api/admin/contests/:id/questions/:questionId` | 200 | 403 | 401 |
+| `PATCH /api/admin/contests/:id/questions/order` | 200 | 403 | 401 |
+| `GET /api/admin/contests/:id/participants` | 200 | 403 | 401 |
 | `GET /api/admin/questions` | 200 | 403 | 401 |
+| `POST /api/admin/questions` | 201 | 403 | 401 |
+| `GET`/`PATCH /api/admin/questions/:questionId` | 200 | 403 | 401 |
+| `GET`/`POST /api/admin/questions/:questionId/test-cases` | 200/201 | 403 | 401 |
+| `PATCH`/`DELETE /api/admin/questions/:questionId/test-cases/:testCaseId` | 200 | 403 | 401 |
 | `GET /api/student/me` | 403 | 200 | 401 |
 | `GET /api/student/dashboard` | 403 | 200 | 401 |
 | `GET /api/student/languages` | 403 | 200 | 401 |
 | `GET /api/student/contests` | 403 | 200 | 401 |
 | `GET /api/student/contests/:id` | 403 | 200 | 401 |
+| `POST /api/student/contests/:id/register` | 403 | 201 | 401 |
+| `GET /api/student/contests/:id/registration` | 403 | 200 | 401 |
 | `GET /api/student/contests/:id/questions` | 403 | 200 | 401 |
 | `POST /api/student/executions` | 403 | 202 | 401 |
 | `GET /api/student/submissions` | 403 | 200 | 401 |
@@ -480,6 +525,10 @@ Migrations live in `services/api/src/migrations/` and run automatically when the
 - `004` creates `contests`, `questions`, `question_test_cases`, and `submissions`.
 - `005` idempotently seeds a development contest titled exactly `Test` (not a substitute for Admin Create Contest).
 - `006` keeps that Test contest open for local execution (clears `start_time` so the UI timer does not expire).
+- `007`–`008` add practice questions (nullable `contest_id`, `is_practice`) and seed three practice problems.
+- `009` adds `contests.end_time`, allows `cancelled` status, and creates `contest_participants` with `UNIQUE (contest_id, user_id)`. It backfills `end_time` only where `start_time` is already set; the Test seed stays open-ended.
+- `010` relaxes the practice XOR check so unassigned library questions can exist (`contest_id` NULL and `is_practice` FALSE). Practice and contest rows are unchanged.
+- `011` creates `contest_questions`, copies existing contest assignments and `sort_order`, adds a trigger that rejects practice membership, then drops `questions.contest_id`.
 
 ```bash
 make db-migrate-codearena
@@ -510,13 +559,32 @@ Register/login body: `{ "email": "...", "password": "..." }`. Password minimum l
 | `GET` | `/api/student/me` | `/student/me` | Bearer JWT + `STUDENT` |
 | `GET` | `/api/student/dashboard` | `/student/dashboard` | Bearer JWT + `STUDENT` |
 | `GET`/`POST` | `/api/admin/contests` | `/admin/contests` | Bearer JWT + `ADMIN` |
+| `GET`/`PATCH` | `/api/admin/contests/:id` | `/admin/contests/:id` | Bearer JWT + `ADMIN` |
+| `POST` | `/api/admin/contests/:id/schedule` | `/admin/contests/:id/schedule` | Bearer JWT + `ADMIN` |
+| `POST` | `/api/admin/contests/:id/cancel` | `/admin/contests/:id/cancel` | Bearer JWT + `ADMIN` |
+| `POST` | `/api/admin/contests/:id/end` | `/admin/contests/:id/end` | Bearer JWT + `ADMIN` |
 | `GET`/`POST` | `/api/admin/contests/:id/questions` | `/admin/contests/:id/questions` | Bearer JWT + `ADMIN` |
+| `POST` | `/api/admin/contests/:id/questions/batch` | `/admin/contests/:id/questions/batch` | Bearer JWT + `ADMIN` |
+| `POST` | `/api/admin/contests/:id/questions/:questionId` | `/admin/contests/:id/questions/:questionId` | Bearer JWT + `ADMIN` |
+| `PATCH` | `/api/admin/contests/:id/questions/order` | `/admin/contests/:id/questions/order` | Bearer JWT + `ADMIN` |
+| `GET` | `/api/admin/contests/:id/participants` | `/admin/contests/:id/participants` | Bearer JWT + `ADMIN` |
+| `GET`/`POST` | `/api/admin/questions` | `/admin/questions` | Bearer JWT + `ADMIN` |
+| `GET`/`PATCH` | `/api/admin/questions/:questionId` | `/admin/questions/:questionId` | Bearer JWT + `ADMIN` |
+| `GET`/`POST` | `/api/admin/questions/:questionId/test-cases` | `/admin/questions/:questionId/test-cases` | Bearer JWT + `ADMIN` |
+| `PATCH`/`DELETE` | `/api/admin/questions/:questionId/test-cases/:testCaseId` | `/admin/questions/:questionId/test-cases/:testCaseId` | Bearer JWT + `ADMIN` |
 | `GET` | `/api/student/contests` | `/student/contests` | Bearer JWT + `STUDENT` |
+| `POST` | `/api/student/contests/:id/register` | `/student/contests/:id/register` | Bearer JWT + `STUDENT` |
+| `GET` | `/api/student/contests/:id/registration` | `/student/contests/:id/registration` | Bearer JWT + `STUDENT` |
 | `POST` | `/api/student/executions` | `/student/executions` | Bearer JWT + `STUDENT` (202 + poll `GET /student/submissions/:id`) |
 
 Send `Authorization: Bearer <token>` from `POST /api/auth/login`. Do not send a client-chosen role.
 
-- Frontend login UI is served at `http://localhost:8080`. Contest, practice, and submission screens use the live Student APIs. Real Judge0 results still require a reachable Judge0 instance.
+- Frontend login UI is served at `http://localhost:8080`. Contest, practice, and submission screens use the live Student/Admin APIs. Real Judge0 results still require a reachable Judge0 instance.
+
+Planned next (see `MileStone-doc.md`):
+
+- Contest evaluation / scoring (Milestone 10)
+- WebSockets, retry/replay, and later operational features remain later milestones
 
 ### Test commands
 
@@ -529,9 +597,3 @@ make test-codearena       # unit + integration
 Integration tests require the Compose `postgres` and `rabbitmq` services. They fail clearly if either is not available; they are not skipped. Messaging and Worker tests publish and consume against the real broker; they are not mock-only.
 
 See `MileStone-doc.md` for the full roadmap.
-
-## Future milestones
-
-Planned next (see `MileStone-doc.md`):
-
-- WebSockets, retry/replay, and later contest features remain later milestones

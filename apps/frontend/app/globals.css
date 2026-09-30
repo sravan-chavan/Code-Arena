@@ -657,6 +657,9 @@ img {
 .badge-ended { background: var(--accent-rose-dim); color: var(--accent-rose); }
 .badge-ended .badge-dot { background: var(--accent-rose); }
 
+.badge-cancelled { background: var(--bg-glass-strong); color: var(--text-muted); }
+.badge-cancelled .badge-dot { background: var(--text-muted); }
+
 .badge-online { background: var(--accent-emerald-dim); color: var(--accent-emerald); }
 .badge-online .badge-dot { background: var(--accent-emerald); }
 
