@@ -5,11 +5,12 @@ import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import Button from '@/components/ui/Button';
 import { formatDate } from '@/lib/mockData';
+import { formatDateTime, localInputToIso } from '@/lib/contestTime';
 import { createAdminContest, fetchAdminContests } from '@/lib/contestsApi';
 import { ApiError } from '@/lib/apiClient';
-import { Plus, Search, Trophy, Users } from 'lucide-react';
+import { Plus, Search, Trophy } from 'lucide-react';
 
-const emptyForm = { title: '', description: '', durationMinutes: 60 };
+const emptyForm = { title: '', description: '', startTime: '', durationMinutes: 60, endTime: '' };
 
 export default function AdminContests() {
   const [searchTerm, setSearchTerm] = useState('');
@@ -60,13 +61,17 @@ export default function AdminContests() {
     setError('');
     setSuccess('');
     try {
-      const created = await createAdminContest({
+      const body = {
         title: form.title,
         description: form.description,
         durationMinutes: Number(form.durationMinutes) || 60,
-        status: 'running',
-      });
-      setSuccess(`Created contest “${created.title}”.`);
+      };
+      const startTime = localInputToIso(form.startTime);
+      const endTime = localInputToIso(form.endTime);
+      if (startTime) body.startTime = startTime;
+      if (endTime) body.endTime = endTime;
+      const created = await createAdminContest(body);
+      setSuccess(`Created draft contest “${created.title}”.`);
       setForm(emptyForm);
       setShowForm(false);
       await load();
@@ -82,7 +87,7 @@ export default function AdminContests() {
       <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-lg)' }}>
         <div>
           <h1 style={{ fontSize: '1.75rem', fontWeight: 700, background: 'linear-gradient(135deg, var(--text-primary), var(--accent-cyan))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', fontFamily: 'var(--font-display)' }}>Contest Management</h1>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginTop: '4px' }}>Create, monitor, and manage coding competitions.</p>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginTop: '4px' }}>Create, schedule, and manage coding competitions.</p>
         </div>
         <Button variant="primary" className="btn-lg" onClick={() => setShowForm((open) => !open)}>
           <Plus size={18} /> Create New Contest
@@ -104,9 +109,20 @@ export default function AdminContests() {
               <textarea className="form-input" rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
             </div>
             <div className="form-group">
+              <label>Start time (local)</label>
+              <input className="form-input" type="datetime-local" value={form.startTime} onChange={(e) => setForm({ ...form, startTime: e.target.value })} />
+            </div>
+            <div className="form-group">
               <label>Duration (minutes)</label>
               <input className="form-input" type="number" min={1} value={form.durationMinutes} onChange={(e) => setForm({ ...form, durationMinutes: e.target.value })} />
             </div>
+            <div className="form-group">
+              <label>End time (local, optional — overrides duration)</label>
+              <input className="form-input" type="datetime-local" value={form.endTime} onChange={(e) => setForm({ ...form, endTime: e.target.value })} />
+            </div>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+              Times are converted to UTC for the API. The contest is saved as a draft until you schedule it.
+            </p>
             <div style={{ display: 'flex', gap: 'var(--space-sm)' }}>
               <Button type="submit" variant="primary" disabled={saving}>{saving ? 'Creating…' : 'Save contest'}</Button>
               <Button type="button" variant="secondary" onClick={() => setShowForm(false)}>Cancel</Button>
@@ -117,8 +133,8 @@ export default function AdminContests() {
 
       <Card>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-md)' }}>
-          <div style={{ display: 'flex', gap: 'var(--space-sm)' }}>
-            {['all', 'running', 'scheduled', 'draft'].map((value) => (
+          <div style={{ display: 'flex', gap: 'var(--space-sm)', flexWrap: 'wrap' }}>
+            {['all', 'draft', 'scheduled', 'running', 'ended', 'cancelled'].map((value) => (
               <button
                 key={value}
                 className={`btn btn-sm ${filter === value ? 'btn-secondary' : 'btn-ghost'}`}
@@ -138,14 +154,15 @@ export default function AdminContests() {
               <tr>
                 <th>Contest Details</th>
                 <th>Status</th>
-                <th>Duration</th>
-                <th>Questions</th>
-                <th>Created</th>
+                <th>Start</th>
+                <th>End</th>
+                <th>Problems</th>
+                <th>Participants</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan="5" style={{ textAlign: 'center', padding: 'var(--space-xl)' }}>Loading contests…</td></tr>
+                <tr><td colSpan="6" style={{ textAlign: 'center', padding: 'var(--space-xl)' }}>Loading contests…</td></tr>
               ) : filteredContests.length > 0 ? filteredContests.map((contest) => (
                 <tr key={contest.id}>
                   <td>
@@ -155,22 +172,19 @@ export default function AdminContests() {
                       </div>
                       <div>
                         <Link href={`/admin/contests/${contest.id}`} style={{ fontWeight: 600, color: 'var(--accent-cyan)' }}>{contest.title}</Link>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{contest.questionCount || 0} Questions</div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{formatDate(contest.createdAt)}</div>
                       </div>
                     </div>
                   </td>
                   <td><Badge status={contest.status} /></td>
-                  <td><div style={{ fontSize: '0.85rem' }}>{contest.durationMinutes} mins</div></td>
-                  <td>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                      <Users size={14} /> {contest.questionCount || 0}
-                    </div>
-                  </td>
-                  <td style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{formatDate(contest.createdAt)}</td>
+                  <td style={{ fontSize: '0.85rem' }}>{formatDateTime(contest.startTime)}</td>
+                  <td style={{ fontSize: '0.85rem' }}>{formatDateTime(contest.endTime)}</td>
+                  <td>{contest.questionCount ?? 0}</td>
+                  <td>{contest.participantCount ?? 0}</td>
                 </tr>
               )) : (
                 <tr>
-                  <td colSpan="5" style={{ textAlign: 'center', padding: 'var(--space-xl)', color: 'var(--text-secondary)' }}>
+                  <td colSpan="6" style={{ textAlign: 'center', padding: 'var(--space-xl)', color: 'var(--text-secondary)' }}>
                     No contests found.
                   </td>
                 </tr>

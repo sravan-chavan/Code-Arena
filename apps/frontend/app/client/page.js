@@ -116,8 +116,8 @@ export default function ClientDashboard() {
                         {formatTime(contest.remainingTime == null ? contest.durationMinutes * 60 : contest.remainingTime)}
                       </span>
                     </div>
-                    <Link href={`/client/contests/${contest.id}`}>
-                      <Button variant="primary" className="btn-sm">Enter Arena</Button>
+                    <Link href={contest.canEnter ? `/client/contests/${contest.id}/arena` : `/client/contests/${contest.id}`}>
+                      <Button variant="primary" className="btn-sm">{contest.canEnter ? 'Enter Arena' : 'View contest'}</Button>
                     </Link>
                   </div>
                 </div>

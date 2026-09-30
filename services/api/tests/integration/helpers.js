@@ -82,6 +82,23 @@ function uniqueKey(prefix) {
 }
 
 /**
+ * The development Test contest is an open-ended running seed (migration 006).
+ * Restore that invariant so later suites are not poisoned if an earlier
+ * lifecycle test or Admin End action closed it.
+ */
+async function restoreOpenEndedTestContest() {
+  await query(`
+    UPDATE contests
+    SET status = 'running',
+        start_time = NULL,
+        end_time = NULL,
+        updated_at = NOW()
+    WHERE is_development_seed = TRUE
+      AND title = 'Test'
+  `);
+}
+
+/**
  * Host-side RabbitMQ settings for integration tests.
  * The API container uses hostname `rabbitmq`. Tests run on the host, so they
  * use the published port on 127.0.0.1 and ignore RABBITMQ_URL.
@@ -106,4 +123,5 @@ module.exports = {
   requirePostgres,
   uniqueKey,
   uniqueEmail,
+  restoreOpenEndedTestContest,
 };

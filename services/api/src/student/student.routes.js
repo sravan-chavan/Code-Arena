@@ -20,6 +20,8 @@ router.get('/practice/submissions', ...requireStudent, asyncHandler(practiceCont
 router.get('/practice/submissions/:id', ...requireStudent, asyncHandler(practiceController.getSubmission));
 router.get('/contests', ...requireStudent, asyncHandler(contestController.listContests));
 router.get('/contests/:id', ...requireStudent, asyncHandler(contestController.getContest));
+router.post('/contests/:id/register', ...requireStudent, asyncHandler(contestController.register));
+router.get('/contests/:id/registration', ...requireStudent, asyncHandler(contestController.getRegistration));
 router.get('/contests/:id/questions', ...requireStudent, asyncHandler(contestController.listQuestions));
 router.get('/contests/:id/questions/:questionId', ...requireStudent, asyncHandler(contestController.getQuestion));
 router.post('/executions', ...requireStudent, asyncHandler(contestController.createExecution));

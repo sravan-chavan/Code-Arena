@@ -10,24 +10,37 @@ function mapContest(row) {
     description: row.description,
     status: row.status,
     startTime: row.start_time instanceof Date ? row.start_time.toISOString() : row.start_time,
+    endTime: row.end_time instanceof Date ? row.end_time.toISOString() : row.end_time,
     durationMinutes: row.duration_minutes,
     createdBy: row.created_by,
     isDevelopmentSeed: row.is_development_seed,
     questionCount: row.question_count === undefined ? undefined : Number(row.question_count),
+    participantCount: row.participant_count === undefined ? undefined : Number(row.participant_count),
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
   };
 }
 
+const COUNT_SELECT = `
+  SELECT c.*, (
+    SELECT COUNT(*)::int FROM contest_questions cq WHERE cq.contest_id = c.id
+  ) AS question_count, (
+    SELECT COUNT(*)::int FROM contest_participants p WHERE p.contest_id = c.id
+  ) AS participant_count
+  FROM contests c
+`;
+
 async function create(input, client) {
   const row = await queryOne(
-    `INSERT INTO contests (title, description, status, start_time, duration_minutes, created_by, is_development_seed)
+    `INSERT INTO contests (
+       title, description, status, start_time, duration_minutes, created_by, is_development_seed
+     )
      VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING *`,
     [
       input.title,
       input.description || '',
-      input.status || 'running',
+      input.status || 'draft',
       input.startTime || null,
       input.durationMinutes || 60,
       input.createdBy,
@@ -35,15 +48,25 @@ async function create(input, client) {
     ],
     client,
   );
-  return mapContest(row);
+  let mapped = mapContest(row);
+  if (input.endTime) {
+    const withEnd = await queryOne(
+      `UPDATE contests SET end_time = $2, updated_at = NOW() WHERE id = $1 RETURNING *`,
+      [row.id, input.endTime],
+      client,
+    );
+    mapped = mapContest(withEnd);
+  }
+  return {
+    ...mapped,
+    questionCount: 0,
+    participantCount: 0,
+  };
 }
 
 async function findById(id, client) {
   const row = await queryOne(
-    `SELECT c.*, (
-       SELECT COUNT(*)::int FROM questions q WHERE q.contest_id = c.id
-     ) AS question_count
-     FROM contests c
+    `${COUNT_SELECT}
      WHERE c.id = $1`,
     [id],
     client,
@@ -64,10 +87,7 @@ async function findDevelopmentSeedByTitle(title, client) {
 
 async function listAll(client) {
   const result = await query(
-    `SELECT c.*, (
-       SELECT COUNT(*)::int FROM questions q WHERE q.contest_id = c.id
-     ) AS question_count
-     FROM contests c
+    `${COUNT_SELECT}
      ORDER BY c.created_at DESC`,
     [],
     client,
@@ -77,18 +97,52 @@ async function listAll(client) {
 
 async function listVisibleToStudents(client) {
   const result = await query(
-    `SELECT c.*, (
-       SELECT COUNT(*)::int FROM questions q WHERE q.contest_id = c.id
-     ) AS question_count
-     FROM contests c
-     WHERE c.status IN ('scheduled', 'running', 'ended')
+    `${COUNT_SELECT}
+     WHERE c.status IN ('scheduled', 'running', 'ended', 'cancelled')
      ORDER BY
-       CASE c.status WHEN 'running' THEN 0 WHEN 'scheduled' THEN 1 ELSE 2 END,
+       CASE c.status
+         WHEN 'running' THEN 0
+         WHEN 'scheduled' THEN 1
+         WHEN 'ended' THEN 2
+         ELSE 3
+       END,
        c.created_at DESC`,
     [],
     client,
   );
   return result.rows.map(mapContest);
+}
+
+async function update(id, fields, client) {
+  const sets = [];
+  const values = [];
+  let index = 1;
+  const columns = {
+    title: 'title',
+    description: 'description',
+    status: 'status',
+    startTime: 'start_time',
+    endTime: 'end_time',
+    durationMinutes: 'duration_minutes',
+  };
+  for (const [key, column] of Object.entries(columns)) {
+    if (Object.prototype.hasOwnProperty.call(fields, key)) {
+      sets.push(`${column} = $${index}`);
+      values.push(fields[key]);
+      index += 1;
+    }
+  }
+  if (sets.length === 0) {
+    return findById(id, client);
+  }
+  sets.push('updated_at = NOW()');
+  values.push(id);
+  await queryOne(
+    `UPDATE contests SET ${sets.join(', ')} WHERE id = $${index} RETURNING id`,
+    values,
+    client,
+  );
+  return findById(id, client);
 }
 
 module.exports = {
@@ -98,4 +152,5 @@ module.exports = {
   findDevelopmentSeedByTitle,
   listAll,
   listVisibleToStudents,
+  update,
 };

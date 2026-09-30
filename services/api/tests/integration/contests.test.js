@@ -1,7 +1,7 @@
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
-const { requirePostgres, uniqueEmail } = require('./helpers');
+const { requirePostgres, uniqueEmail, restoreOpenEndedTestContest } = require('./helpers');
 const { closePool } = require('../../src/db/pool');
 const { query } = require('../../src/db/query');
 const { runMigrations } = require('../../src/db/migrate');
@@ -24,6 +24,7 @@ describe('Contest and execution APIs (PostgreSQL)', () => {
   before(async () => {
     await requirePostgres();
     await runMigrations();
+    await restoreOpenEndedTestContest();
     app = createApp();
     studentEmail = uniqueEmail('contest-student');
 
@@ -69,20 +70,33 @@ describe('Contest and execution APIs (PostgreSQL)', () => {
 
   it('lets an admin persist a contest and question', async () => {
     const title = `E2E Contest ${Date.now()}`;
+    const startTime = new Date(Date.now() - 60_000).toISOString();
     const created = await request(app)
       .post('/admin/contests')
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ title, description: 'API integration contest', durationMinutes: 45 })
+      .send({
+        title,
+        description: 'API integration contest',
+        startTime,
+        durationMinutes: 45,
+      })
       .expect(201);
 
     assert.equal(created.body.success, true);
     assert.equal(created.body.data.contest.title, title);
-    assert.equal(created.body.data.contest.status, 'running');
+    assert.equal(created.body.data.contest.status, 'draft');
     contestId = created.body.data.contest.id;
     createdContestIds.push(contestId);
 
     const stored = await query('SELECT title, status FROM contests WHERE id = $1', [contestId]);
     assert.equal(stored.rows[0].title, title);
+    assert.equal(stored.rows[0].status, 'draft');
+
+    const scheduled = await request(app)
+      .post(`/admin/contests/${contestId}/schedule`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
+    assert.equal(scheduled.body.data.contest.status, 'running');
 
     const question = await request(app)
       .post(`/admin/contests/${contestId}/questions`)
@@ -134,6 +148,16 @@ describe('Contest and execution APIs (PostgreSQL)', () => {
     assert.ok(titles.includes('Test'));
     assert.ok(list.body.data.contests.some((contest) => contest.id === contestId));
     assert.equal(list.body.data.contests[0].isDevelopmentSeed, undefined);
+
+    await request(app)
+      .get(`/student/contests/${contestId}/questions`)
+      .set('Authorization', `Bearer ${studentToken}`)
+      .expect(403);
+
+    await request(app)
+      .post(`/student/contests/${contestId}/register`)
+      .set('Authorization', `Bearer ${studentToken}`)
+      .expect(201);
 
     const questions = await request(app)
       .get(`/student/contests/${contestId}/questions`)

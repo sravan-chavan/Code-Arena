@@ -15,6 +15,16 @@ export async function fetchStudentContest(id) {
   return data.contest;
 }
 
+export async function registerForContest(id) {
+  const data = await api.post(`/student/contests/${id}/register`, {});
+  return data.registration;
+}
+
+export async function fetchStudentRegistration(id) {
+  const data = await api.get(`/student/contests/${id}/registration`);
+  return data.registration;
+}
+
 export async function fetchStudentQuestions(contestId) {
   const data = await api.get(`/student/contests/${contestId}/questions`);
   return data.questions || [];
@@ -76,15 +86,113 @@ export async function fetchAdminContest(id) {
   return data.contest;
 }
 
+export async function updateAdminContest(id, body) {
+  const data = await api.patch(`/admin/contests/${id}`, body);
+  return data.contest;
+}
+
+export async function scheduleAdminContest(id) {
+  const data = await api.post(`/admin/contests/${id}/schedule`, {});
+  return data.contest;
+}
+
+export async function cancelAdminContest(id) {
+  const data = await api.post(`/admin/contests/${id}/cancel`, {});
+  return data.contest;
+}
+
+export async function endAdminContest(id) {
+  const data = await api.post(`/admin/contests/${id}/end`, {});
+  return data.contest;
+}
+
+export async function fetchAdminParticipants(id) {
+  const data = await api.get(`/admin/contests/${id}/participants`);
+  return data.participants || [];
+}
+
 export async function fetchAdminQuestions(contestId) {
   const path = contestId ? `/admin/contests/${contestId}/questions` : '/admin/questions';
   const data = await api.get(path);
   return data.questions || [];
 }
 
+export async function fetchAdminQuestion(questionId) {
+  const data = await api.get(`/admin/questions/${questionId}`);
+  return data.question;
+}
+
 export async function createAdminQuestion(contestId, body) {
   const data = await api.post(`/admin/contests/${contestId}/questions`, body);
   return data.question;
+}
+
+export async function createAdminLibraryQuestion(body) {
+  const data = await api.post('/admin/questions', body);
+  return data.question;
+}
+
+export async function updateAdminQuestion(questionId, body) {
+  const data = await api.patch(`/admin/questions/${questionId}`, body);
+  return data.question;
+}
+
+export async function attachAdminQuestion(contestId, questionId) {
+  const data = await api.post(`/admin/contests/${contestId}/questions/${questionId}`, {});
+  return data.question;
+}
+
+export async function attachAdminQuestions(contestId, questionIds) {
+  const data = await api.post(`/admin/contests/${contestId}/questions/batch`, { questionIds });
+  return data.questions || [];
+}
+
+export async function reorderAdminQuestions(contestId, questionIds) {
+  const data = await api.patch(`/admin/contests/${contestId}/questions/order`, { questionIds });
+  return data.questions || [];
+}
+
+export async function fetchAdminTestCases(questionId) {
+  const data = await api.get(`/admin/questions/${questionId}/test-cases`);
+  return data.testCases || [];
+}
+
+export async function createAdminTestCase(questionId, body) {
+  const data = await api.post(`/admin/questions/${questionId}/test-cases`, body);
+  return data.testCase;
+}
+
+export async function updateAdminTestCase(questionId, testCaseId, body) {
+  const data = await api.patch(`/admin/questions/${questionId}/test-cases/${testCaseId}`, body);
+  return data.testCase;
+}
+
+export async function deleteAdminTestCase(questionId, testCaseId) {
+  const data = await api.delete(`/admin/questions/${questionId}/test-cases/${testCaseId}`);
+  return data.testCase;
+}
+
+export function questionContests(question) {
+  if (!question || !Array.isArray(question.contests)) return [];
+  return question.contests.filter((row) => row && row.id);
+}
+
+export function belongsToContest(question, contestId) {
+  if (!question || !contestId) return false;
+  if (question.contestId === contestId) return true;
+  return questionContests(question).some((row) => row.id === contestId);
+}
+
+export function assignmentLabel(question) {
+  if (!question) return 'Unassigned';
+  if (question.assignment === 'practice' || question.isPractice) return 'Practice';
+  const contests = questionContests(question);
+  if (question.assignment === 'contest' || contests.length > 0) {
+    if (contests.length === 1) return contests[0].title || 'Contest';
+    if (contests.length > 1) return `Assigned to ${contests.length} contests`;
+    return question.contestTitle || 'Contest';
+  }
+  return 'Unassigned';
 }
 
 export function formatStatus(status) {

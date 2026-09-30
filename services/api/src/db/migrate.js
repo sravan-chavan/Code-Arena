@@ -10,8 +10,9 @@ const ADVISORY_LOCK_KEY = 820221;
 function checksumOf(migration) {
   const body =
     typeof migration.up === 'function' ? migration.up.toString() : String(migration.up);
+  const normalized = String(body).replace(/\r\n/g, '\n');
   return createHash('sha256')
-    .update(`${migration.id}\n${migration.name}\n${body}`)
+    .update(`${migration.id}\n${migration.name}\n${normalized}`)
     .digest('hex');
 }
 

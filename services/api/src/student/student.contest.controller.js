@@ -5,23 +5,46 @@ const { listLanguages } = require('../config/languages');
 const { sendSuccess } = require('../utils/api-response');
 const { assertUuid } = require('../utils/input');
 
-async function listContests(_req, res) {
-  const contests = await contestService.listStudentContests();
+async function listContests(req, res) {
+  const contests = await contestService.listStudentContests(req.user);
   return sendSuccess(res, { contests }, 200);
 }
 
 async function getContest(req, res) {
-  const contest = await contestService.getStudentContest(assertUuid(req.params.id, 'id'));
+  const contest = await contestService.getStudentContest(
+    req.user,
+    assertUuid(req.params.id, 'id'),
+  );
   return sendSuccess(res, { contest }, 200);
 }
 
+async function register(req, res) {
+  const registration = await contestService.registerStudent(
+    req.user,
+    assertUuid(req.params.id, 'id'),
+  );
+  return sendSuccess(res, { registration }, 201);
+}
+
+async function getRegistration(req, res) {
+  const payload = await contestService.getStudentRegistration(
+    req.user,
+    assertUuid(req.params.id, 'id'),
+  );
+  return sendSuccess(res, payload, 200);
+}
+
 async function listQuestions(req, res) {
-  const questions = await questionService.listStudentQuestions(assertUuid(req.params.id, 'id'));
+  const questions = await questionService.listStudentQuestions(
+    req.user,
+    assertUuid(req.params.id, 'id'),
+  );
   return sendSuccess(res, { questions }, 200);
 }
 
 async function getQuestion(req, res) {
   const question = await questionService.getStudentQuestion(
+    req.user,
     assertUuid(req.params.id, 'id'),
     assertUuid(req.params.questionId, 'questionId'),
   );
@@ -53,6 +76,8 @@ async function listSubmissions(req, res) {
 module.exports = {
   listContests,
   getContest,
+  register,
+  getRegistration,
   listQuestions,
   getQuestion,
   languages,
