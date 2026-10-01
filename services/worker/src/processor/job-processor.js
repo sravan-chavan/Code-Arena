@@ -46,6 +46,40 @@ function casesForJob(job) {
   }];
 }
 
+async function publishStarted(message, deps) {
+  const payload = message && message.payload;
+  if (!payload || typeof payload.jobId !== 'string') {
+    return;
+  }
+  const body = {
+    jobId: payload.jobId,
+    contestId: typeof payload.contestId === 'string' ? payload.contestId : null,
+    participantId: typeof payload.participantId === 'string' ? payload.participantId : null,
+    questionId: typeof payload.questionId === 'string' ? payload.questionId : null,
+    kind: payload.kind === 'run' || payload.kind === 'submit' ? payload.kind : null,
+  };
+  if (deps.publishStarted === false) {
+    return;
+  }
+  if (typeof deps.publishStarted === 'function') {
+    await deps.publishStarted(body);
+    return;
+  }
+  if (!isMessagingReady()) {
+    return;
+  }
+  try {
+    await publish({
+      type: MESSAGE_TYPES.EXECUTION_STARTED,
+      payload: body,
+    });
+  } catch (err) {
+    console.error(
+      `[WORKER] Execution started publish failed jobId=${payload.jobId} message=${err.message}`,
+    );
+  }
+}
+
 async function publishCompleted(result, deps) {
   if (deps.publishResult === false) {
     return;
@@ -163,6 +197,7 @@ async function processExecutionJob(job, message, deps = {}) {
   const client = deps.judge0Client || createJudge0Client(judge0Config);
   const poll = deps.pollUntilTerminal || pollUntilTerminal;
   const cases = casesForJob(job);
+  await publishStarted(message, deps);
 
   console.log(
     `[WORKER] Execution received messageId=${message.messageId} jobId=${job.jobId} contestId=${job.contestId || 'none'} questionId=${job.questionId || 'none'} languageId=${job.languageId} cases=${cases.length}`,

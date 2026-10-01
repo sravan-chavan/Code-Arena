@@ -35,6 +35,12 @@ function mapParticipant(row) {
       ? 0
       : Number(row.solved_count),
     lastScoringAt: iso(row.last_scoring_at),
+    exitedAt: iso(row.exited_at),
+    removedAt: iso(row.removed_at),
+    readdedAt: iso(row.readded_at),
+    readdCount: row.readd_count === undefined || row.readd_count === null
+      ? 0
+      : Number(row.readd_count),
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
   };
@@ -56,6 +62,8 @@ function toPublic(participant) {
     penalty: participant.penalty,
     possibleScore: participant.possibleScore,
     solvedCount: participant.solvedCount,
+    exitedAt: participant.exitedAt || null,
+    readdCount: participant.readdCount || 0,
   };
 }
 
@@ -80,6 +88,10 @@ function toAdmin(participant) {
     possibleScore: participant.possibleScore,
     solvedCount: participant.solvedCount,
     lastScoringAt: participant.lastScoringAt,
+    exitedAt: participant.exitedAt || null,
+    removedAt: participant.removedAt || null,
+    readdedAt: participant.readdedAt || null,
+    readdCount: participant.readdCount || 0,
   };
 }
 
@@ -100,6 +112,8 @@ function toSession(participant, extras = {}) {
     penalty: participant.penalty,
     possibleScore: participant.possibleScore,
     solvedCount: participant.solvedCount,
+    exitedAt: participant.exitedAt || null,
+    readdCount: participant.readdCount || 0,
     ...extras,
   };
 }
@@ -205,6 +219,10 @@ async function update(id, fields, client) {
     possibleScore: 'possible_score',
     solvedCount: 'solved_count',
     lastScoringAt: 'last_scoring_at',
+    exitedAt: 'exited_at',
+    removedAt: 'removed_at',
+    readdedAt: 'readded_at',
+    readdCount: 'readd_count',
   };
   for (const [key, column] of Object.entries(columns)) {
     if (Object.prototype.hasOwnProperty.call(fields, key)) {

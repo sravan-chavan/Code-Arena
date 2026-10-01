@@ -18,6 +18,7 @@ router.patch('/contests/:id', ...requireAdmin, asyncHandler(contestController.up
 router.post('/contests/:id/schedule', ...requireAdmin, asyncHandler(contestController.scheduleContest));
 router.post('/contests/:id/cancel', ...requireAdmin, asyncHandler(contestController.cancelContest));
 router.post('/contests/:id/end', ...requireAdmin, asyncHandler(contestController.endContest));
+router.post('/contests/:id/resume', ...requireAdmin, asyncHandler(contestController.resumeContest));
 router.get('/contests/:id/questions', ...requireAdmin, asyncHandler(contestController.listQuestions));
 router.post('/contests/:id/questions/batch', ...requireAdmin, asyncHandler(contestController.attachQuestions));
 router.post('/contests/:id/questions/:questionId', ...requireAdmin, asyncHandler(contestController.attachQuestion));
@@ -25,6 +26,7 @@ router.post('/contests/:id/questions', ...requireAdmin, asyncHandler(contestCont
 router.patch('/contests/:id/questions/order', ...requireAdmin, asyncHandler(contestController.reorderQuestions));
 router.get('/contests/:id/participants', ...requireAdmin, asyncHandler(contestController.listParticipants));
 router.post('/contests/:id/participants/:participantId/remove', ...requireAdmin, asyncHandler(contestController.removeParticipant));
+router.post('/contests/:id/participants/:participantId/re-add', ...requireAdmin, asyncHandler(contestController.readdParticipant));
 router.get('/contests/:id/ranking', ...requireAdmin, asyncHandler(contestController.ranking));
 router.get('/contests/:id/submissions', ...requireAdmin, asyncHandler(contestController.listSubmissions));
 router.get('/contests/:id/violations', ...requireAdmin, asyncHandler(contestController.listViolations));

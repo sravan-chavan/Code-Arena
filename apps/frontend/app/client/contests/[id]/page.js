@@ -8,6 +8,8 @@ import Button from '@/components/ui/Button';
 import ContestTimer from '@/components/ui/ContestTimer';
 import { formatDateTime } from '@/lib/contestTime';
 import { enterContest, fetchStudentContest, fetchStudentQuestions, registerForContest } from '@/lib/contestsApi';
+import { useContestChannel } from '@/lib/useContestChannel';
+import ConnectionStatus from '@/components/ui/ConnectionStatus';
 import { ApiError } from '@/lib/apiClient';
 import { ChevronLeft } from 'lucide-react';
 
@@ -36,6 +38,24 @@ export default function StudentContestDetail() {
       setQuestions([]);
     }
   }, [id]);
+
+  const onContestEvent = useCallback((event) => {
+    if (!event || event.version !== 1) return;
+    if (
+      event.type === 'contest.started'
+      || event.type === 'contest.ended'
+      || event.type === 'contest.cancelled'
+      || event.type === 'participant.removed'
+      || event.type === 'participant.status.updated'
+      || event.type === 'contest.session.invalidated'
+    ) {
+      load().catch((err) => {
+        setError(err instanceof ApiError ? err.message : 'Unable to load contest.');
+      });
+    }
+  }, [load]);
+
+  const connectionStatus = useContestChannel(id, onContestEvent);
 
   useEffect(() => {
     if (!id) return undefined;
@@ -95,6 +115,7 @@ export default function StudentContestDetail() {
           <Badge status={contest.status} />
           {contest.registration ? <Badge status={contest.registration.status} /> : null}
           <ContestTimer contest={contest} onExpired={load} />
+          <ConnectionStatus status={connectionStatus} />
         </div>
       </div>
       {error ? <p style={{ color: 'var(--accent-rose)' }}>{error}</p> : null}
@@ -115,6 +136,9 @@ export default function StudentContestDetail() {
         ) : (
           <p>{contest.eligibilityReason || 'You are not registered.'}</p>
         )}
+        {contest.registration && contest.eligibilityReason && !contest.canEnter ? (
+          <p>{contest.eligibilityReason}</p>
+        ) : null}
         <div style={{ display: 'flex', gap: 'var(--space-sm)', marginTop: 'var(--space-md)', flexWrap: 'wrap' }}>
           {contest.canRegister ? (
             <Button variant="primary" disabled={registering} onClick={handleRegister}>

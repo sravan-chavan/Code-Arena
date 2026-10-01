@@ -19,6 +19,8 @@ const PARTICIPANT_STATUSES = Object.freeze({
   EXITED: 'exited',
 });
 
+const EXITED_MESSAGE = 'You exited this contest. You cannot re-enter unless an administrator adds you again.';
+
 /**
  * Admin-triggered transitions of the stored status.
  * Time-based scheduled→running and running→ended are computed, not posted.
@@ -27,7 +29,7 @@ const ADMIN_TRANSITIONS = Object.freeze({
   [STATUSES.DRAFT]: Object.freeze([STATUSES.SCHEDULED, STATUSES.CANCELLED]),
   [STATUSES.SCHEDULED]: Object.freeze([STATUSES.CANCELLED]),
   [STATUSES.RUNNING]: Object.freeze([STATUSES.ENDED]),
-  [STATUSES.ENDED]: Object.freeze([]),
+  [STATUSES.ENDED]: Object.freeze([STATUSES.RUNNING]),
   [STATUSES.CANCELLED]: Object.freeze([]),
 });
 
@@ -154,6 +156,9 @@ function allowedAdminActions(effectiveStatus, storedStatus) {
   if (effectiveStatus === STATUSES.RUNNING) {
     return ['update', 'end'];
   }
+  if (storedStatus === STATUSES.ENDED || effectiveStatus === STATUSES.ENDED) {
+    return ['resume'];
+  }
   return [];
 }
 
@@ -182,7 +187,7 @@ function eligibilityForStudent(effectiveStatus, participant) {
     return {
       canRegister: false,
       canEnter: false,
-      reason: 'Your contest session has ended.',
+      reason: EXITED_MESSAGE,
     };
   }
   if (participant) {
@@ -254,7 +259,7 @@ function arenaDeniedError(effectiveStatus, participant) {
     });
   }
   if (participant.status === PARTICIPANT_STATUSES.EXITED) {
-    return new AppError('Your contest session has ended.', 403, {
+    return new AppError(EXITED_MESSAGE, 403, {
       code: 'SESSION_ENDED',
     });
   }
@@ -276,6 +281,109 @@ function arenaDeniedError(effectiveStatus, participant) {
   });
 }
 
+/**
+ * Resume deadline rule.
+ *
+ * The admin chooses the new contest end. startTime and durationMinutes stay.
+ * Exited and removed participants are left untouched.
+ * A participant who has not started is left untouched; enter computes
+ * min(start + duration, new contest end).
+ * A started participant who still has a personal deadline inside the new
+ * window keeps it, capped at the new contest end.
+ * A started participant whose deadline has passed because the contest clock
+ * stopped them (deadline at or after the previous contest end) is moved to
+ * the new contest end. If that end is in the future, completed becomes started.
+ * A personal deadline that expired while the contest was still open is not extended.
+ * Score, penalty, submissions, violations, and question invalidation are not inputs.
+ */
+function nextParticipantStateAfterResume(participant, { previousEndTime, newEndTime, nowMs }) {
+  if (!participant) {
+    return null;
+  }
+  if (
+    participant.status === PARTICIPANT_STATUSES.EXITED
+    || participant.status === PARTICIPANT_STATUSES.REMOVED
+  ) {
+    return null;
+  }
+  if (!participant.startedAt) {
+    return null;
+  }
+
+  const currentMs = parseTimestampMs(participant.effectiveDeadline);
+  const newEndMs = parseTimestampMs(newEndTime);
+  const previousEndMs = parseTimestampMs(previousEndTime);
+  let deadline = participant.effectiveDeadline;
+
+  if (currentMs != null && currentMs > nowMs) {
+    if (newEndMs != null && currentMs > newEndMs) {
+      deadline = newEndTime;
+    }
+  } else {
+    const contestStoppedThem = previousEndMs == null
+      || currentMs == null
+      || currentMs >= previousEndMs - 1000;
+    if (contestStoppedThem && newEndMs != null && newEndMs > nowMs) {
+      deadline = newEndTime;
+    }
+  }
+
+  let status = participant.status;
+  let completedAt = participant.completedAt || null;
+  const deadlineMs = parseTimestampMs(deadline);
+  if (
+    deadlineMs != null
+    && deadlineMs > nowMs
+    && status === PARTICIPANT_STATUSES.COMPLETED
+  ) {
+    status = PARTICIPANT_STATUSES.STARTED;
+    completedAt = null;
+  }
+
+  if (
+    deadline === participant.effectiveDeadline
+    && status === participant.status
+    && completedAt === (participant.completedAt || null)
+  ) {
+    return null;
+  }
+
+  return {
+    effectiveDeadline: deadline,
+    status,
+    completedAt,
+  };
+}
+
+/**
+ * Re-add restores the same participant row. It does not clear exitedAt,
+ * submissions, score, penalty, or violations. A past deadline is aligned to
+ * the current contest end only while the contest is running.
+ */
+function nextParticipantStateAfterReadd(participant, contest, nowMs = clock.now()) {
+  if (!participant || participant.status !== PARTICIPANT_STATUSES.EXITED) {
+    return null;
+  }
+  const status = participant.startedAt
+    ? PARTICIPANT_STATUSES.STARTED
+    : PARTICIPANT_STATUSES.REGISTERED;
+  let effectiveDeadline = participant.effectiveDeadline;
+  if (computeEffectiveStatus(contest, nowMs) === STATUSES.RUNNING) {
+    const deadlineMs = parseTimestampMs(participant.effectiveDeadline);
+    const contestEndMs = resolveEndMs(contest);
+    if ((deadlineMs == null || deadlineMs <= nowMs) && contestEndMs != null && contestEndMs > nowMs) {
+      effectiveDeadline = new Date(contestEndMs).toISOString();
+    } else if (deadlineMs != null && contestEndMs != null && deadlineMs > contestEndMs) {
+      effectiveDeadline = new Date(contestEndMs).toISOString();
+    }
+  }
+  return {
+    status,
+    effectiveDeadline,
+    completedAt: null,
+  };
+}
+
 function executionDeniedError(effectiveStatus, participant) {
   if (!participant) {
     return new AppError('You must register for this contest first.', 403, {
@@ -288,7 +396,7 @@ function executionDeniedError(effectiveStatus, participant) {
     });
   }
   if (participant.status === PARTICIPANT_STATUSES.EXITED) {
-    return new AppError('Your contest session has ended.', 409, {
+    return new AppError(EXITED_MESSAGE, 409, {
       code: 'SESSION_ENDED',
     });
   }
@@ -314,6 +422,7 @@ module.exports = {
   STATUSES,
   STATUS_VALUES,
   PARTICIPANT_STATUSES,
+  EXITED_MESSAGE,
   ADMIN_TRANSITIONS,
   isStatus,
   parseTimestampMs,
@@ -331,4 +440,6 @@ module.exports = {
   registrationClosedMessage,
   arenaDeniedError,
   executionDeniedError,
+  nextParticipantStateAfterResume,
+  nextParticipantStateAfterReadd,
 };

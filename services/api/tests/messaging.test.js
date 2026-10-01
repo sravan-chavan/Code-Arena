@@ -161,6 +161,11 @@ describe('RabbitMQ topology plan', () => {
         routingKey: 'codearena.execution.completed',
       },
       {
+        queue: 'codearena.execution.results',
+        exchange: 'codearena.events',
+        routingKey: 'codearena.execution.started',
+      },
+      {
         queue: 'codearena.execution.results.dlq',
         exchange: 'codearena.events.dlx',
         routingKey: 'codearena.execution.completed.dead',

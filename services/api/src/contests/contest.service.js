@@ -6,6 +6,7 @@ const clock = require('./clock');
 const lifecycle = require('./contest.lifecycle');
 const sessionService = require('./session.service');
 const { trimRequired } = require('../utils/input');
+const { withTransaction } = require('../db/transaction');
 
 const { STATUSES } = lifecycle;
 
@@ -137,7 +138,9 @@ async function syncStoredStatus(contest) {
   if (effective === STATUSES.ENDED && !contest.endTime) {
     fields.endTime = clock.isoNow();
   }
-  return contestRepository.update(contest.id, fields);
+  const updated = await contestRepository.update(contest.id, fields);
+  require('../realtime/notify').contestTransition(updated, contest.status);
+  return updated;
 }
 
 async function createContest(user, body) {
@@ -251,6 +254,61 @@ async function cancelContest(id) {
   }
   lifecycle.assertAdminTransition(contest.status, STATUSES.CANCELLED);
   const updated = await contestRepository.update(id, { status: STATUSES.CANCELLED });
+  require('../realtime/notify').contestTransition(updated, contest.status);
+  return toAdminContest(updated);
+}
+
+function parseResumeEndTime(body) {
+  const source = body || {};
+  const hasEnd = source.endTime !== undefined && source.endTime !== null && source.endTime !== '';
+  const hasExtend = source.extendMinutes !== undefined
+    && source.extendMinutes !== null
+    && source.extendMinutes !== '';
+  if (hasEnd === hasExtend) {
+    throw new AppError('Provide either endTime or extendMinutes', 400, {
+      code: 'VALIDATION_ERROR',
+    });
+  }
+  if (hasEnd) {
+    const endTime = parseOptionalTimestamp(source.endTime, 'endTime');
+    if (Date.parse(endTime) <= clock.now()) {
+      throw new AppError('Contest end time must be in the future', 400, {
+        code: 'VALIDATION_ERROR',
+      });
+    }
+    return endTime;
+  }
+  const minutes = Number.parseInt(String(source.extendMinutes), 10);
+  if (!Number.isInteger(minutes) || minutes <= 0) {
+    throw new AppError('extendMinutes must be a positive integer', 400, {
+      code: 'VALIDATION_ERROR',
+    });
+  }
+  return new Date(clock.now() + minutes * 60 * 1000).toISOString();
+}
+
+async function resumeContest(id, body) {
+  const contest = await syncStoredStatus(await requireContest(id));
+  if (contest.status !== STATUSES.ENDED) {
+    lifecycle.assertAdminTransition(contest.status, STATUSES.RUNNING);
+  }
+  lifecycle.assertAdminTransition(STATUSES.ENDED, STATUSES.RUNNING);
+
+  const endTime = parseResumeEndTime(body);
+  const previousEndTime = contest.endTime;
+  const updated = await withTransaction(async (client) => {
+    const saved = await contestRepository.update(id, {
+      status: STATUSES.RUNNING,
+      endTime,
+      resumedAt: clock.isoNow(),
+    }, client);
+    await sessionService.reconcileAfterResume(saved, previousEndTime, client);
+    return saved;
+  });
+  console.log(
+    `[API] Contest resumed contestId=${id} endTime=${updated.endTime}`,
+  );
+  require('../realtime/notify').contestTransition(updated, contest.status);
   return toAdminContest(updated);
 }
 
@@ -264,6 +322,7 @@ async function endContest(id) {
     status: STATUSES.ENDED,
     endTime: clock.isoNow(),
   });
+  require('../realtime/notify').contestTransition(updated, contest.status);
   return toAdminContest(updated);
 }
 
@@ -401,6 +460,7 @@ module.exports = {
   scheduleContest,
   cancelContest,
   endContest,
+  resumeContest,
   listAdminContests,
   getAdminContest,
   listAdminParticipants,

@@ -12,6 +12,9 @@ function mapContest(row) {
     startTime: row.start_time instanceof Date ? row.start_time.toISOString() : row.start_time,
     endTime: row.end_time instanceof Date ? row.end_time.toISOString() : row.end_time,
     durationMinutes: row.duration_minutes,
+    resumedAt: row.resumed_at instanceof Date
+      ? row.resumed_at.toISOString()
+      : (row.resumed_at || null),
     createdBy: row.created_by,
     isDevelopmentSeed: row.is_development_seed,
     questionCount: row.question_count === undefined ? undefined : Number(row.question_count),
@@ -102,6 +105,24 @@ async function listAll(client) {
   return result.rows.map(mapContest);
 }
 
+async function listByStoredStatuses(statuses, client) {
+  const result = await query(
+    `SELECT id, title, status, start_time, end_time, duration_minutes
+     FROM contests
+     WHERE status = ANY($1::text[])`,
+    [statuses],
+    client,
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    title: row.title,
+    status: row.status,
+    startTime: row.start_time instanceof Date ? row.start_time.toISOString() : row.start_time,
+    endTime: row.end_time instanceof Date ? row.end_time.toISOString() : row.end_time,
+    durationMinutes: row.duration_minutes,
+  }));
+}
+
 async function listVisibleToStudents(client) {
   const result = await query(
     `${COUNT_SELECT}
@@ -131,6 +152,7 @@ async function update(id, fields, client) {
     startTime: 'start_time',
     endTime: 'end_time',
     durationMinutes: 'duration_minutes',
+    resumedAt: 'resumed_at',
   };
   for (const [key, column] of Object.entries(columns)) {
     if (Object.prototype.hasOwnProperty.call(fields, key)) {
@@ -158,6 +180,7 @@ module.exports = {
   findById,
   findDevelopmentSeedByTitle,
   listAll,
+  listByStoredStatuses,
   listVisibleToStudents,
   update,
 };

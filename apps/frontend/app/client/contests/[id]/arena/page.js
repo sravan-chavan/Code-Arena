@@ -6,20 +6,25 @@ import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
 import Editor from '@/components/ui/Editor';
 import ContestTimer from '@/components/ui/ContestTimer';
+import ConnectionStatus from '@/components/ui/ConnectionStatus';
 import {
   createExecution,
   enterContest,
   exitContest,
+  fetchContestSession,
   fetchLanguages,
   fetchStudentContest,
   fetchStudentContestSubmissions,
   fetchStudentQuestions,
   fetchStudentRanking,
+  fetchSubmission,
   formatStatus,
-  pollSubmission,
   reportContestViolation,
   setCurrentQuestion,
 } from '@/lib/contestsApi';
+import { awaitExecutionResult } from '@/lib/awaitExecution';
+import { mergeRanking, submissionView } from '@/lib/realtimeConfig';
+import { useContestChannel } from '@/lib/useContestChannel';
 import { ApiError } from '@/lib/apiClient';
 import { Clock, Code2, Play, UploadCloud, CheckCircle, XCircle } from 'lucide-react';
 
@@ -43,9 +48,15 @@ export default function ContestArena() {
   const [submissionResult, setSubmissionResult] = useState(null);
   const [error, setError] = useState('');
   const [ended, setEnded] = useState(false);
+  const [endingSoon, setEndingSoon] = useState(false);
   const [lockMessage, setLockMessage] = useState('');
+  const [livePhase, setLivePhase] = useState('');
+  const [exitOpen, setExitOpen] = useState(false);
+  const [exiting, setExiting] = useState(false);
   const reportingRef = useRef(false);
+  const sessionStatusRef = useRef(null);
   const questionIdRef = useRef(null);
+  const executionAbortRef = useRef(null);
 
   const handleLock = useCallback((err) => {
     if (err instanceof ApiError && LOCK_CODES.has(err.code)) {
@@ -56,20 +67,20 @@ export default function ContestArena() {
     return false;
   }, []);
 
-  const refreshMeta = useCallback(async () => {
+  const refreshMeta = useCallback(async (opts) => {
     const [nextRanking, nextHistory] = await Promise.all([
-      fetchStudentRanking(id),
-      fetchStudentContestSubmissions(id),
+      fetchStudentRanking(id, opts),
+      fetchStudentContestSubmissions(id, opts),
     ]);
     setRanking(nextRanking);
     setHistory(nextHistory);
   }, [id]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (opts) => {
     const nextSession = await enterContest(id);
     const [nextContest, nextQuestions, nextLanguages] = await Promise.all([
-      fetchStudentContest(id),
-      fetchStudentQuestions(id),
+      fetchStudentContest(id, opts),
+      fetchStudentQuestions(id, opts),
       fetchLanguages(),
     ]);
     setSession(nextSession);
@@ -87,15 +98,140 @@ export default function ContestArena() {
       const first = nextLanguages.find((item) => item.slug === 'python') || nextLanguages[0];
       return first?.template || '';
     });
-    await refreshMeta();
+    await refreshMeta(opts);
     return { nextSession, nextQuestions };
   }, [id, refreshMeta]);
 
+  const onContestEvent = useCallback((event) => {
+    if (!event || event.version !== 1) return;
+    if (event.type === 'contest.ranking.updated') {
+      if (event.payload?.mode === 'snapshot') {
+        setRanking((current) => mergeRanking(current, event.payload.ranking || []));
+      } else if (event.payload?.mode === 'invalidate') {
+        fetchStudentRanking(id).then(setRanking).catch(() => {});
+      }
+    }
+    if (event.type === 'participant.score.updated' && event.payload) {
+      setSession((current) => (
+        current && current.participantId === event.payload.participantId
+          ? {
+            ...current,
+            score: event.payload.score,
+            penalty: event.payload.penalty,
+            possibleScore: event.payload.possibleScore,
+            solvedCount: event.payload.solvedCount,
+          }
+          : current
+      ));
+    }
+    if (event.type === 'contest.started') {
+      setContest((current) => (current ? {
+        ...current,
+        status: event.payload?.status || 'running',
+        startTime: event.payload?.startTime ?? current.startTime,
+        endTime: event.payload?.endTime ?? current.endTime,
+        resumedAt: event.payload?.resumedAt ?? current.resumedAt,
+        serverTime: event.payload?.serverTime || current.serverTime,
+      } : current));
+      const status = sessionStatusRef.current;
+      if (status === 'exited' || status === 'removed') {
+        setEnded(true);
+        return;
+      }
+      fetchContestSession(id)
+        .then((next) => {
+          setSession(next);
+          const blocked = next.status === 'exited'
+            || next.status === 'removed'
+            || next.status === 'completed'
+            || next.sessionExpired;
+          setEnded(blocked);
+          if (!blocked) {
+            setLockMessage('');
+            setEndingSoon(false);
+          }
+        })
+        .catch((err) => {
+          handleLock(err);
+        });
+    }
+    if (event.type === 'contest.ending') {
+      setEndingSoon(true);
+    }
+    if (event.type === 'contest.ended' || event.type === 'contest.cancelled') {
+      setEnded(true);
+      setLockMessage(event.type === 'contest.cancelled'
+        ? 'This contest has been cancelled.'
+        : 'This contest has ended.');
+      setContest((current) => (
+        current ? { ...current, status: event.payload?.status || 'ended' } : current
+      ));
+    }
+    if (event.type === 'participant.removed' || event.payload?.reason === 'PARTICIPANT_REMOVED') {
+      setEnded(true);
+      setLockMessage('You have been removed from this contest.');
+    } else if (event.type === 'contest.session.invalidated' && event.payload?.reason === 'SESSION_EXPIRED') {
+      setEnded(true);
+      setLockMessage('Your contest time has expired.');
+    } else if (event.type === 'contest.session.invalidated' && event.payload?.reason === 'SESSION_ENDED') {
+      setEnded(true);
+      setLockMessage('You exited this contest. You cannot re-enter unless an administrator adds you again.');
+    }
+    if (event.type === 'participant.status.updated' && event.payload?.status === 'exited') {
+      setEnded(true);
+      setLockMessage('You exited this contest. You cannot re-enter unless an administrator adds you again.');
+    }
+    if (
+      event.type === 'participant.status.updated'
+      && (event.payload?.status === 'started' || event.payload?.status === 'registered')
+    ) {
+      fetchContestSession(id)
+        .then((next) => {
+          setSession(next);
+          const blocked = next.status === 'exited' || next.status === 'removed' || next.sessionExpired;
+          setEnded(blocked);
+          if (!blocked) setLockMessage('');
+        })
+        .catch((err) => {
+          handleLock(err);
+        });
+    }
+  }, [id, handleLock]);
+
+  const reconcile = useCallback(async () => {
+    try {
+      const [nextSession, nextRanking, nextContest] = await Promise.all([
+        fetchContestSession(id),
+        fetchStudentRanking(id),
+        fetchStudentContest(id),
+      ]);
+      setSession(nextSession);
+      setRanking(nextRanking);
+      setContest(nextContest);
+      const closed = nextContest.status !== 'running'
+        || nextSession.status === 'removed'
+        || nextSession.status === 'exited'
+        || nextSession.sessionExpired;
+      if (closed) {
+        setEnded(true);
+      }
+    } catch (err) {
+      handleLock(err);
+    }
+  }, [id, handleLock]);
+
+  const connectionStatus = useContestChannel(id, onContestEvent, { onReconnect: reconcile });
+
   useEffect(() => {
+    sessionStatusRef.current = session?.status || null;
+  }, [session]);
+
+  useEffect(() => {
+    const controller = new AbortController();
     let cancelled = false;
     (async () => {
       try {
-        const loaded = await load();
+        const loaded = await load({ signal: controller.signal });
         if (cancelled) return;
         const first = loaded.nextQuestions[0];
         if (first) {
@@ -110,7 +246,11 @@ export default function ContestArena() {
         }
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      controller.abort();
+      executionAbortRef.current?.abort();
+    };
   }, [load, handleLock, id]);
 
   useEffect(() => {
@@ -118,11 +258,16 @@ export default function ContestArena() {
       if (document.visibilityState !== 'hidden' || reportingRef.current || ended) return;
       reportingRef.current = true;
       reportContestViolation(id, 'TAB_SWITCH')
-        .then(async (payload) => {
+        .then((payload) => {
           setSession(payload.session);
-          const nextQuestions = await fetchStudentQuestions(id);
-          setQuestions(nextQuestions);
-          await refreshMeta();
+          const invalidated = new Set(payload.session?.invalidatedQuestionIds || []);
+          if (invalidated.size > 0) {
+            setQuestions((current) => current.map((question) => (
+              invalidated.has(question.id)
+                ? { ...question, invalidated: true, earnedPoints: 0, totalPoints: 0 }
+                : question
+            )));
+          }
         })
         .catch((err) => {
           if (!handleLock(err)) {
@@ -135,33 +280,52 @@ export default function ContestArena() {
     }
     document.addEventListener('visibilitychange', onVisibility);
     return () => document.removeEventListener('visibilitychange', onVisibility);
-  }, [id, ended, handleLock, refreshMeta]);
+  }, [id, ended, handleLock]);
 
   useEffect(() => {
     function onKeyDown(event) {
       if (!(event.ctrlKey && event.shiftKey && (event.key === 'C' || event.key === 'c'))) return;
+      const status = sessionStatusRef.current;
+      if (status !== 'started' && status !== 'registered') return;
       event.preventDefault();
       event.stopPropagation();
-      exitContest(id)
-        .then(() => {
-          router.replace(`/client/contests/${id}`);
-        })
-        .catch((err) => {
-          if (!handleLock(err)) {
-            setError(err instanceof ApiError ? err.message : 'Unable to close the contest session.');
-          } else {
-            router.replace(`/client/contests/${id}`);
-          }
-        });
+      setExitOpen(true);
     }
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [id, router, handleLock]);
+  }, []);
+
+  async function confirmExit() {
+    setExiting(true);
+    setError('');
+    try {
+      const next = await exitContest(id);
+      setSession(next);
+      setEnded(true);
+      setLockMessage('You exited this contest. You cannot re-enter unless an administrator adds you again.');
+      setExitOpen(false);
+      router.replace(`/client/contests/${id}`);
+    } catch (err) {
+      if (!handleLock(err)) {
+        setError(err instanceof ApiError ? err.message : 'Unable to exit the contest.');
+      } else {
+        setExitOpen(false);
+        router.replace(`/client/contests/${id}`);
+      }
+    } finally {
+      setExiting(false);
+    }
+  }
 
   async function handleExpired() {
+    if (ended) return;
     setEnded(true);
     try {
-      await load();
+      const nextSession = await fetchContestSession(id);
+      setSession(nextSession);
+      if (nextSession.sessionExpired || nextSession.status === 'completed') {
+        setLockMessage('Your contest time has expired.');
+      }
     } catch (err) {
       if (!handleLock(err)) {
         setLockMessage(err instanceof ApiError ? err.message : 'This contest has ended.');
@@ -206,6 +370,7 @@ export default function ContestArena() {
 
   const activeQuestion = questions[activeQuestionIndex];
   const closed = ended || contest.status !== 'running' || session.sessionExpired || ['completed', 'exited', 'removed'].includes(session.status);
+  const canExit = session.status === 'started' || session.status === 'registered';
   const questionHistory = history.filter((row) => row.questionId === activeQuestion.id && row.kind === 'submit');
   const you = ranking.find((row) => row.participantId === session.participantId);
 
@@ -232,8 +397,23 @@ export default function ContestArena() {
         sourceCode: code,
         kind,
       });
-      const result = await pollSubmission(created.id);
-      setSubmissionResult(result);
+      setLivePhase('Queued');
+      const controller = new AbortController();
+      executionAbortRef.current = controller;
+      const result = await awaitExecutionResult(
+        created.id,
+        () => fetchSubmission(created.id, { signal: controller.signal }),
+        {
+          signal: controller.signal,
+          onEvent: (event) => {
+            if (event.type === 'submission.queued') setLivePhase('Queued');
+            if (event.type === 'submission.evaluating') setLivePhase('Evaluating');
+          },
+        },
+      );
+      const view = submissionView(result, created.id);
+      setLivePhase('');
+      setSubmissionResult(view);
       const publicResults = (result.testResults || []).filter((row) => !row.isHidden);
       const lines = [
         `Result: ${formatStatus(result.status)}`,
@@ -249,17 +429,18 @@ export default function ContestArena() {
         result.compileOutput ? `\ncompile:\n${result.compileOutput}` : null,
       ].filter(Boolean);
       setOutput(lines.join('\n'));
-      const nextQuestions = await fetchStudentQuestions(id);
-      setQuestions(nextQuestions);
-      const nextSession = await enterContest(id);
-      setSession(nextSession);
-      await refreshMeta();
+      setHistory((current) => [view, ...current.filter((row) => row.id !== view.id)]);
+      if (kind === 'submit') {
+        const nextQuestions = await fetchStudentQuestions(id);
+        setQuestions(nextQuestions);
+      }
     } catch (err) {
       if (!handleLock(err)) {
         setOutput(err instanceof ApiError ? err.message : err.message || 'Execution failed.');
       }
     } finally {
       running(false);
+      setLivePhase('');
     }
   }
 
@@ -268,8 +449,9 @@ export default function ContestArena() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-md)', background: 'var(--bg-card)', padding: 'var(--space-sm) var(--space-md)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-default)' }}>
         <div>
           <h2 style={{ fontSize: '1.1rem', fontWeight: 700 }}>{contest.title}</h2>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-            Score {session.score} / {session.possibleScore} · Penalty {session.penalty} · Rank {you?.rank ?? '—'}
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', gap: 12, alignItems: 'center' }}>
+            <span>Score {session.score} / {session.possibleScore} · Penalty {session.penalty} · Rank {you?.rank ?? '—'}</span>
+            <ConnectionStatus status={connectionStatus} />
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-xl)' }}>
@@ -295,11 +477,52 @@ export default function ContestArena() {
               <ContestTimer contest={contest} deadline={session.effectiveDeadline} onExpired={handleExpired} />
             </span>
           </div>
+          {canExit ? (
+            <Button type="button" variant="secondary" onClick={() => setExitOpen(true)}>
+              Exit Contest
+            </Button>
+          ) : null}
         </div>
       </div>
 
+      {exitOpen ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="exit-contest-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 40,
+            padding: 'var(--space-md)',
+          }}
+        >
+          <div className="card" style={{ maxWidth: 440, width: '100%' }}>
+            <h2 id="exit-contest-title" style={{ fontSize: '1.15rem', marginBottom: 'var(--space-sm)' }}>Exit Contest</h2>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: 'var(--space-lg)' }}>
+              Are you sure you want to exit this contest? You will not be able to re-enter unless an administrator adds you again.
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-sm)' }}>
+              <Button type="button" variant="ghost" disabled={exiting} onClick={() => setExitOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="button" variant="secondary" disabled={exiting} onClick={confirmExit}>
+                <span data-testid="confirm-exit-contest">{exiting ? 'Exiting…' : 'Exit Contest'}</span>
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {endingSoon && !closed ? (
+        <p style={{ color: 'var(--accent-cyan)', marginBottom: 'var(--space-sm)' }}>Contest ending soon.</p>
+      ) : null}
       {lockMessage || closed ? (
-        <p style={{ color: 'var(--accent-rose)', marginBottom: 'var(--space-sm)' }}>
+        <p data-testid="contest-lock" style={{ color: 'var(--accent-rose)', marginBottom: 'var(--space-sm)' }}>
           {lockMessage || 'This contest session is closed. New executions are rejected by the API.'}
         </p>
       ) : null}
@@ -414,7 +637,7 @@ export default function ContestArena() {
               </div>
             ) : null}
             <div style={{ padding: 'var(--space-md)', background: 'var(--bg-input)', fontFamily: 'var(--font-code)', fontSize: '0.85rem', whiteSpace: 'pre-wrap' }}>
-              {output || 'Output will appear here...'}
+              {livePhase ? `${livePhase}\n` : ''}{output || 'Output will appear here...'}
             </div>
             {questionHistory.length > 0 ? (
               <div style={{ padding: 'var(--space-md)', borderTop: '1px solid var(--border-default)' }}>

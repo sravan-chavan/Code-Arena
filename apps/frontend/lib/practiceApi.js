@@ -1,4 +1,5 @@
 import { api } from './apiClient';
+import { isTerminalSubmission, pollUntilTerminal } from './controlledPoll';
 
 export async function fetchPracticeProblems() {
   const data = await api.get('/student/practice/problems');
@@ -20,8 +21,8 @@ export async function createPracticeExecution({ questionId, language, sourceCode
   return data.submission;
 }
 
-export async function fetchPracticeSubmission(id) {
-  const data = await api.get(`/student/practice/submissions/${id}`);
+export async function fetchPracticeSubmission(id, opts) {
+  const data = await api.get(`/student/practice/submissions/${id}`, opts);
   return data.submission;
 }
 
@@ -30,22 +31,10 @@ export async function fetchPracticeSubmissions() {
   return data.submissions || [];
 }
 
-export async function pollPracticeSubmission(id, { timeoutMs = 45000, intervalMs = 800 } = {}) {
-  const started = Date.now();
-  const terminal = new Set([
-    'ACCEPTED',
-    'WRONG_ANSWER',
-    'TIME_LIMIT_EXCEEDED',
-    'COMPILATION_ERROR',
-    'RUNTIME_ERROR',
-    'INTERNAL_ERROR',
-  ]);
-  while (Date.now() - started < timeoutMs) {
-    const submission = await fetchPracticeSubmission(id);
-    if (terminal.has(submission.status)) {
-      return submission;
-    }
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
-  }
-  throw new Error('Timed out waiting for the execution result.');
+export async function pollPracticeSubmission(id, { timeoutMs = 45000, signal } = {}) {
+  return pollUntilTerminal(() => fetchPracticeSubmission(id, { signal }), {
+    timeoutMs,
+    signal,
+    isTerminal: isTerminalSubmission,
+  });
 }

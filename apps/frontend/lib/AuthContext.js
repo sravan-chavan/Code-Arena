@@ -1,6 +1,7 @@
 'use client';
 import { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { api, getToken, setToken, clearToken, ApiError } from '@/lib/apiClient';
+import { disconnectRealtime } from '@/lib/realtimeClient';
 
 const AuthContext = createContext(null);
 
@@ -81,8 +82,22 @@ export function AuthProvider({ children }) {
     }
   }, [applyAuthenticatedUser]);
 
+  const register = useCallback(async (email, password) => {
+    try {
+      await api.post('/auth/register', { email, password }, { auth: false });
+      return login(email, password);
+    } catch (err) {
+      if (!(err instanceof ApiError)) {
+        return { success: false, error: 'Registration failed. Please try again.' };
+      }
+      const fieldMessage = err.payload?.errors?.[0]?.message;
+      return { success: false, error: fieldMessage || err.message };
+    }
+  }, [login]);
+
   const logout = useCallback(() => {
     // Logout is a frontend-only operation — there is no server session to destroy.
+    disconnectRealtime();
     clearToken();
     setUser(null);
     setApplication(null);
@@ -96,6 +111,7 @@ export function AuthProvider({ children }) {
         application,
         applicationError,
         login,
+        register,
         logout,
         isAuthenticated: !!user,
         isLoading,

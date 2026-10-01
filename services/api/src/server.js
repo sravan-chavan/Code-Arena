@@ -7,6 +7,7 @@ const {
   logMessagingError,
 } = require('./messaging');
 const { startExecutionResultsConsumer } = require('./messaging/results-consumer');
+const { attachRealtime, closeRealtime } = require('./realtime');
 
 const { initPool, waitForDatabase, warmPool, closePool } = require('./db/pool');
 const { runMigrations } = require('./db/migrate');
@@ -28,6 +29,7 @@ function setupShutdown(server) {
     }, 10_000);
     forceTimer.unref();
 
+    closeRealtime();
     server.close((closeError) => {
       if (closeError) {
         console.error('[API] Error during HTTP server close:', closeError.message);
@@ -82,8 +84,8 @@ async function start() {
   );
 
   // Topology is asserted so publishers can route to the execution queue.
-  // The Worker consumes execution requests. The API consumes execution results
-  // only so the UI can poll persisted Judge0 outcomes (no WebSockets).
+  // The Worker consumes execution requests. The API consumes execution
+  // started/completed results and publishes WebSocket notifications.
   await initMessaging({ serviceName: config.serviceName });
   await startExecutionResultsConsumer();
   console.log('[API] RabbitMQ producer ready; execution consumption belongs to Worker');
@@ -94,6 +96,7 @@ async function start() {
       `[API] Server started on ${config.host}:${config.port} (env=${config.env}, milestone=${config.milestone})`,
     );
   });
+  attachRealtime(server);
 
   setupShutdown(server);
   return { app, server };

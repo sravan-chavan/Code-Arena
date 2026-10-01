@@ -45,8 +45,14 @@ class ApiError extends Error {
  * when a token is present, and normalizes backend error responses
  * ({ success: false, message }) into thrown ApiError instances.
  */
-async function request(path, { method = 'GET', body, headers = {}, auth = true } = {}) {
+async function request(path, { method = 'GET', body, headers = {}, auth = true, signal } = {}) {
   const url = `${API_BASE_URL}${path}`;
+
+  if (typeof window !== 'undefined' && window.__codearenaCountRequests) {
+    const key = `${method} ${path}`;
+    window.__codearenaRequestCounts = window.__codearenaRequestCounts || {};
+    window.__codearenaRequestCounts[key] = (window.__codearenaRequestCounts[key] || 0) + 1;
+  }
 
   const finalHeaders = {
     'Content-Type': 'application/json',
@@ -66,8 +72,12 @@ async function request(path, { method = 'GET', body, headers = {}, auth = true }
       method,
       headers: finalHeaders,
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal,
     });
   } catch (networkErr) {
+    if (networkErr && networkErr.name === 'AbortError') {
+      throw new ApiError('Request cancelled.', 0, null);
+    }
     throw new ApiError(
       'Unable to reach the server. Please check your connection and try again.',
       0,
