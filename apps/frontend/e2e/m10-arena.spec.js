@@ -42,7 +42,7 @@ test.describe('M10 contest evaluation UI', () => {
     await page.goto(`/client/contests/${contestId}`);
     await page.getByRole('button', { name: 'Enter Contest' }).click();
     await expect(page.getByText('Remaining')).toBeVisible();
-    await expect(page.getByText('Exit Contest')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Exit Contest' })).toBeVisible();
     await expect(page.getByText('Ctrl')).toHaveCount(0);
 
     await page.reload();

@@ -42,7 +42,7 @@ function createApp() {
           databaseHealth: '/v1/health/db',
         },
         200,
-          'CodeArena API (Milestone 9)',
+          'CodeArena API (Milestone 11)',
       ),
     ),
   );

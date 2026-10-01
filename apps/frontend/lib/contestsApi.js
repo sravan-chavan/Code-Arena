@@ -1,8 +1,13 @@
 import { api } from './apiClient';
+import { deduped } from './httpCache';
+import { LANGUAGE_TTL_MS } from './realtimeConfig';
+import { isTerminalSubmission, pollUntilTerminal } from './controlledPoll';
 
-export async function fetchLanguages() {
-  const data = await api.get('/student/languages');
-  return data.languages || [];
+export function fetchLanguages() {
+  return deduped('student:languages', async () => {
+    const data = await api.get('/student/languages');
+    return data.languages || [];
+  }, { ttlMs: LANGUAGE_TTL_MS });
 }
 
 export async function fetchStudentContests() {
@@ -10,9 +15,11 @@ export async function fetchStudentContests() {
   return data.contests || [];
 }
 
-export async function fetchStudentContest(id) {
-  const data = await api.get(`/student/contests/${id}`);
-  return data.contest;
+export async function fetchStudentContest(id, opts) {
+  return deduped(`student:contest:${id}`, async () => {
+    const data = await api.get(`/student/contests/${id}`, opts);
+    return data.contest;
+  });
 }
 
 export async function registerForContest(id) {
@@ -25,9 +32,11 @@ export async function enterContest(id) {
   return data.session;
 }
 
-export async function fetchContestSession(id) {
-  const data = await api.get(`/student/contests/${id}/session`);
-  return data.session;
+export async function fetchContestSession(id, opts) {
+  return deduped(`student:session:${id}`, async () => {
+    const data = await api.get(`/student/contests/${id}/session`, opts);
+    return data.session;
+  });
 }
 
 export async function exitContest(id) {
@@ -45,13 +54,13 @@ export async function reportContestViolation(contestId, type = 'TAB_SWITCH') {
   return data;
 }
 
-export async function fetchStudentRanking(contestId) {
-  const data = await api.get(`/student/contests/${contestId}/ranking`);
+export async function fetchStudentRanking(contestId, opts) {
+  const data = await api.get(`/student/contests/${contestId}/ranking`, opts);
   return data.ranking || [];
 }
 
-export async function fetchStudentContestSubmissions(contestId) {
-  const data = await api.get(`/student/contests/${contestId}/submissions`);
+export async function fetchStudentContestSubmissions(contestId, opts) {
+  const data = await api.get(`/student/contests/${contestId}/submissions`, opts);
   return data.submissions || [];
 }
 
@@ -60,8 +69,8 @@ export async function fetchStudentRegistration(id) {
   return data.registration;
 }
 
-export async function fetchStudentQuestions(contestId) {
-  const data = await api.get(`/student/contests/${contestId}/questions`);
+export async function fetchStudentQuestions(contestId, opts) {
+  const data = await api.get(`/student/contests/${contestId}/questions`, opts);
   return data.questions || [];
 }
 
@@ -76,8 +85,8 @@ export async function createExecution({ contestId, questionId, language, sourceC
   return data.submission;
 }
 
-export async function fetchSubmission(id) {
-  const data = await api.get(`/student/submissions/${id}`);
+export async function fetchSubmission(id, opts) {
+  const data = await api.get(`/student/submissions/${id}`, opts);
   return data.submission;
 }
 
@@ -86,24 +95,12 @@ export async function fetchStudentSubmissions() {
   return data.submissions || [];
 }
 
-export async function pollSubmission(id, { timeoutMs = 45000, intervalMs = 800 } = {}) {
-  const started = Date.now();
-  const terminal = new Set([
-    'ACCEPTED',
-    'WRONG_ANSWER',
-    'TIME_LIMIT_EXCEEDED',
-    'COMPILATION_ERROR',
-    'RUNTIME_ERROR',
-    'INTERNAL_ERROR',
-  ]);
-  while (Date.now() - started < timeoutMs) {
-    const submission = await fetchSubmission(id);
-    if (terminal.has(submission.status) && submission.status !== 'QUEUED' && submission.status !== 'RUNNING') {
-      return submission;
-    }
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
-  }
-  throw new Error('Timed out waiting for the execution result.');
+export async function pollSubmission(id, { timeoutMs = 45000, signal } = {}) {
+  return pollUntilTerminal(() => fetchSubmission(id, { signal }), {
+    timeoutMs,
+    signal,
+    isTerminal: isTerminalSubmission,
+  });
 }
 
 export async function fetchAdminContests() {
@@ -116,9 +113,11 @@ export async function createAdminContest(body) {
   return data.contest;
 }
 
-export async function fetchAdminContest(id) {
-  const data = await api.get(`/admin/contests/${id}`);
-  return data.contest;
+export async function fetchAdminContest(id, opts) {
+  return deduped(`admin:contest:${id}`, async () => {
+    const data = await api.get(`/admin/contests/${id}`, opts);
+    return data.contest;
+  });
 }
 
 export async function updateAdminContest(id, body) {
@@ -141,8 +140,13 @@ export async function endAdminContest(id) {
   return data.contest;
 }
 
-export async function fetchAdminParticipants(id) {
-  const data = await api.get(`/admin/contests/${id}/participants`);
+export async function resumeAdminContest(id, body) {
+  const data = await api.post(`/admin/contests/${id}/resume`, body);
+  return data.contest;
+}
+
+export async function fetchAdminParticipants(id, opts) {
+  const data = await api.get(`/admin/contests/${id}/participants`, opts);
   return data.participants || [];
 }
 
@@ -151,24 +155,29 @@ export async function removeAdminParticipant(contestId, participantId) {
   return data.participant;
 }
 
-export async function fetchAdminRanking(contestId) {
-  const data = await api.get(`/admin/contests/${contestId}/ranking`);
+export async function readdAdminParticipant(contestId, participantId) {
+  const data = await api.post(`/admin/contests/${contestId}/participants/${participantId}/re-add`, {});
+  return data.participant;
+}
+
+export async function fetchAdminRanking(contestId, opts) {
+  const data = await api.get(`/admin/contests/${contestId}/ranking`, opts);
   return data.ranking || [];
 }
 
-export async function fetchAdminContestSubmissions(contestId) {
-  const data = await api.get(`/admin/contests/${contestId}/submissions`);
+export async function fetchAdminContestSubmissions(contestId, opts) {
+  const data = await api.get(`/admin/contests/${contestId}/submissions`, opts);
   return data.submissions || [];
 }
 
-export async function fetchAdminViolations(contestId) {
-  const data = await api.get(`/admin/contests/${contestId}/violations`);
+export async function fetchAdminViolations(contestId, opts) {
+  const data = await api.get(`/admin/contests/${contestId}/violations`, opts);
   return data.violations || [];
 }
 
-export async function fetchAdminQuestions(contestId) {
+export async function fetchAdminQuestions(contestId, opts) {
   const path = contestId ? `/admin/contests/${contestId}/questions` : '/admin/questions';
-  const data = await api.get(path);
+  const data = await api.get(path, opts);
   return data.questions || [];
 }
 

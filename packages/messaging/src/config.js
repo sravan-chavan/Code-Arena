@@ -103,6 +103,7 @@ function loadRabbitmqConfig(env = process.env) {
     executionResultQueue: clean(env.RABBITMQ_EXECUTION_RESULT_QUEUE) || DEFAULT_EXECUTION_RESULT_QUEUE,
     executionResultDeadQueue: clean(env.RABBITMQ_EXECUTION_RESULT_DLQ) || DEFAULT_EXECUTION_RESULT_DLQ,
     executionResultRoutingKey: MESSAGE_TYPES.EXECUTION_COMPLETED,
+    executionStartedRoutingKey: MESSAGE_TYPES.EXECUTION_STARTED,
     executionResultDeadLetterRoutingKey: DEAD_LETTER_ROUTING_KEYS.EXECUTION_COMPLETED,
     prefetch: parseIntOrDefault(env.RABBITMQ_PREFETCH, 1, { min: 1, max: 1000 }),
     consumerEnabled: parseBoolean(env.RABBITMQ_CONSUMER_ENABLED, true),

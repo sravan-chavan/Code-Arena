@@ -104,6 +104,7 @@ async function enqueueExecution(user, body, { practice }) {
       },
     });
     console.log(`[API] Execution requested submissionId=${submission.id} questionId=${question.id}`);
+    require('../realtime/notify').submissionQueued(submission);
   } catch (err) {
     if (err && (err.code === 'RABBITMQ_NOT_CONNECTED' || err.code === 'RABBITMQ_UNAVAILABLE')) {
       throw new AppError('Execution queue is unavailable', 503, { code: err.code });
@@ -223,7 +224,25 @@ async function applyExecutionResult(payload) {
       }
     }
     return updated;
+  }).then((updated) => {
+    if (updated) {
+      void require('../realtime/notify').submissionFinished(updated);
+    }
+    return updated;
   });
+}
+
+async function markEvaluating(payload) {
+  if (!payload || typeof payload.jobId !== 'string') {
+    return null;
+  }
+  const updated = await submissionRepository.markRunning(payload.jobId);
+  if (!updated) {
+    return null;
+  }
+  console.log(`[API] Submission evaluating submissionId=${updated.id}`);
+  require('../realtime/notify').submissionEvaluating(updated);
+  return updated;
 }
 
 async function getStudentRanking(user, contestId) {
@@ -245,6 +264,7 @@ module.exports = {
   getOwnedPracticeSubmission,
   listOwnedPracticeSubmissions,
   applyExecutionResult,
+  markEvaluating,
   getStudentRanking,
   getAdminRanking,
   selectTestCases,

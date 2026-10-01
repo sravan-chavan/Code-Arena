@@ -98,6 +98,11 @@ function buildTopologyPlan(config) {
         routingKey: config.executionResultRoutingKey,
       }),
       Object.freeze({
+        queue: config.executionResultQueue,
+        exchange: config.exchange,
+        routingKey: config.executionStartedRoutingKey,
+      }),
+      Object.freeze({
         queue: config.executionResultDeadQueue,
         exchange: config.deadLetterExchange,
         routingKey: config.executionResultDeadLetterRoutingKey,

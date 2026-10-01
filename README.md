@@ -1,10 +1,10 @@
 # CodeArena
 
-CodeArena is a Dockerized coding contest platform. Milestone 0 established the infrastructure skeleton. Milestone 1 built the Express API foundation. Milestone 2 added the PostgreSQL database foundation. Milestone 3 added authentication and RBAC. Milestone 4 added Admin and Participant application API contracts. Milestone 5 added the RabbitMQ messaging architecture. Milestone 6 turned the Worker into a real background consumer of the execution queue. Milestone 7 integrates an external Judge0 CE instance into the Worker. Milestone 8 adds Practice Mode. Milestone 9 adds the contest engine (lifecycle, registration, reusable questions). **Milestone 10** adds contest evaluation: per-test points, contest submissions, scoring, penalty, ranking, contest sessions/timers, tab-switch invalidation, and admin participant removal. The official UI is the unified Next.js app in `apps/frontend`, served through Nginx.
+CodeArena is a Dockerized coding contest platform. Milestone 0 established the infrastructure skeleton. Milestone 1 built the Express API foundation. Milestone 2 added the PostgreSQL database foundation. Milestone 3 added authentication and RBAC. Milestone 4 added Admin and Participant application API contracts. Milestone 5 added the RabbitMQ messaging architecture. Milestone 6 turned the Worker into a real background consumer of the execution queue. Milestone 7 integrates an external Judge0 CE instance into the Worker. Milestone 8 adds Practice Mode. Milestone 9 adds the contest engine (lifecycle, registration, reusable questions). **Milestone 10** adds contest evaluation: per-test points, contest submissions, scoring, penalty, ranking, contest sessions/timers, tab-switch invalidation, and admin participant removal. **Milestone 11** adds a single-instance WebSocket gateway for live submission, contest, and ranking events, and removes unbounded client polling. The official UI is the unified Next.js app in `apps/frontend`, served through Nginx.
 
 ## Architecture overview
 
-Current execution flow (Milestone 7–10):
+Current execution flow (Milestone 11):
 
 ```text
 Admin UI → Create Contest / Add Question → API → PostgreSQL
@@ -17,13 +17,14 @@ RabbitMQ execution queue
     ↓
 Worker → Judge0 (poll) → correctness evaluation
     ↓
-RabbitMQ results queue (codearena.execution.completed)
+RabbitMQ results queue (codearena.execution.started / codearena.execution.completed)
     ↓
-API consumer updates submissions
+API consumer updates submissions and emits an in-process domain event
     ↓
-Student UI polls GET /student/submissions/:id
-          or GET /student/practice/submissions/:id
+WebSocket gateway → browser
 ```
+
+HTTP remains the request/response path (login, contest editing, submission create, the initial ranking read). WebSocket events are notifications. If the socket is down, submission status falls back to bounded HTTP polling that stops at a terminal state.
 
 Current local HTTP flow:
 
@@ -31,8 +32,13 @@ Current local HTTP flow:
 Browser
   → Nginx (:8080)
       → /api/*  → api:4000
+      → /ws     → api:4000 (WebSocket upgrade)
       → /*      → frontend:3000
 ```
+
+Milestone 11 keeps one API process. WebSocket fans out only to sockets connected to that process. Horizontal scaling later needs a shared pub/sub bus; Redis is not part of this deployment.
+
+Ranking events send a compact snapshot while a contest has at most `WS_RANKING_SNAPSHOT_MAX` participants (default 200). Larger contests receive `mode: "invalidate"`, and each client performs one HTTP ranking read.
 
 Service boundaries:
 
@@ -50,8 +56,8 @@ Service boundaries:
 Browser
   → Nginx (:8080 host → :80 container)
       → /api/*     → api:4000
+      → /ws        → api:4000 WebSocket upgrade
       → /*         → frontend:3000
-      → /ws        → prepared (not implemented)
 
 postgres (volume: codearena_postgres_data)
 rabbitmq + management UI
@@ -350,7 +356,7 @@ The API remains the RabbitMQ **producer**. The Worker consumes `codearena.execut
 
 Judge0 stays **outside** Compose. Point `JUDGE0_URL` at a running Judge0 CE instance. An empty `JUDGE0_AUTH_TOKEN` omits the `X-Auth-Token` header.
 
-M7 Judge0 processing is unchanged. Contests, questions, test cases, and submissions are persisted in PostgreSQL (migrations `004`–`006`). The Worker publishes `codearena.execution.completed` after evaluation; the API consumes the results queue and the Student UI polls the submission.
+M7 Judge0 processing is unchanged. Contests, questions, test cases, and submissions are persisted in PostgreSQL (migrations `004`–`006`). The Worker publishes `codearena.execution.started` when evaluation begins and `codearena.execution.completed` when it finishes. The API consumes that results queue and notifies the browser over WebSocket. A bounded HTTP poll remains only when the socket is unavailable.
 
 **Milestone 8 — Practice Mode**
 
@@ -563,12 +569,14 @@ Register/login body: `{ "email": "...", "password": "..." }`. Password minimum l
 | `POST` | `/api/admin/contests/:id/schedule` | `/admin/contests/:id/schedule` | Bearer JWT + `ADMIN` |
 | `POST` | `/api/admin/contests/:id/cancel` | `/admin/contests/:id/cancel` | Bearer JWT + `ADMIN` |
 | `POST` | `/api/admin/contests/:id/end` | `/admin/contests/:id/end` | Bearer JWT + `ADMIN` |
+| `POST` | `/api/admin/contests/:id/resume` | `/admin/contests/:id/resume` | Bearer JWT + `ADMIN`. Body is exactly one of `endTime` (future ISO-8601) or `extendMinutes` (positive integer). |
 | `GET`/`POST` | `/api/admin/contests/:id/questions` | `/admin/contests/:id/questions` | Bearer JWT + `ADMIN` |
 | `POST` | `/api/admin/contests/:id/questions/batch` | `/admin/contests/:id/questions/batch` | Bearer JWT + `ADMIN` |
 | `POST` | `/api/admin/contests/:id/questions/:questionId` | `/admin/contests/:id/questions/:questionId` | Bearer JWT + `ADMIN` |
 | `PATCH` | `/api/admin/contests/:id/questions/order` | `/admin/contests/:id/questions/order` | Bearer JWT + `ADMIN` |
 | `GET` | `/api/admin/contests/:id/participants` | `/admin/contests/:id/participants` | Bearer JWT + `ADMIN` |
 | `POST` | `/api/admin/contests/:id/participants/:participantId/remove` | `/admin/contests/:id/participants/:participantId/remove` | Bearer JWT + `ADMIN` |
+| `POST` | `/api/admin/contests/:id/participants/:participantId/re-add` | `/admin/contests/:id/participants/:participantId/re-add` | Bearer JWT + `ADMIN`. Exited participants only. |
 | `GET` | `/api/admin/contests/:id/ranking` | `/admin/contests/:id/ranking` | Bearer JWT + `ADMIN` |
 | `GET` | `/api/admin/contests/:id/submissions` | `/admin/contests/:id/submissions` | Bearer JWT + `ADMIN` |
 | `GET` | `/api/admin/contests/:id/violations` | `/admin/contests/:id/violations` | Bearer JWT + `ADMIN` |
@@ -581,7 +589,7 @@ Register/login body: `{ "email": "...", "password": "..." }`. Password minimum l
 | `GET` | `/api/student/contests/:id/registration` | `/student/contests/:id/registration` | Bearer JWT + `STUDENT` |
 | `POST` | `/api/student/contests/:id/enter` | `/student/contests/:id/enter` | Bearer JWT + `STUDENT` |
 | `GET` | `/api/student/contests/:id/session` | `/student/contests/:id/session` | Bearer JWT + `STUDENT` |
-| `POST` | `/api/student/contests/:id/exit` | `/student/contests/:id/exit` | Bearer JWT + `STUDENT` (hidden Ctrl+Shift+C only) |
+| `POST` | `/api/student/contests/:id/exit` | `/student/contests/:id/exit` | Bearer JWT + `STUDENT` |
 | `POST` | `/api/student/contests/:id/current-question` | `/student/contests/:id/current-question` | Bearer JWT + `STUDENT` |
 | `POST` | `/api/student/contests/:id/violations` | `/student/contests/:id/violations` | Bearer JWT + `STUDENT` |
 | `GET` | `/api/student/contests/:id/ranking` | `/student/contests/:id/ranking` | Bearer JWT + `STUDENT` |
@@ -594,7 +602,13 @@ Send `Authorization: Bearer <token>` from `POST /api/auth/login`. Do not send a 
 
 Test-case points default to **10** in PostgreSQL. Question and contest totals are `SUM(points)` from persisted test cases. Contest ranking is HTTP-only (no WebSockets). Penalty is ICPC-inspired and documented in `services/api/src/contests/scoring.js` because MileStone-doc.md does not define a numeric formula: for each scoring question, minutes from contest start (or session start) to the first submission that reached the current earned points, plus 20 minutes per earlier wrong submit.
 
-The Contest Arena has no visible exit control. Closing a session uses a hidden application shortcut **Ctrl+Shift+C**. Chrome may consume that combination for its element picker, so JavaScript does not always receive it. The browser cannot lock down OS-level switching; M10 records `visibilitychange` events as `TAB_SWITCH` violations.
+The login page has Login/Register tabs. Register uses the existing `POST /api/auth/register` contract (`email`, `password`), validates email/password/confirm-password in the browser, then signs the student in with `POST /api/auth/login`. The server always stores `STUDENT` and ignores a client-supplied role.
+
+The Contest Arena has a visible **Exit Contest** confirmation. Exiting persists `exited` and `exited_at`, closes that participation, and keeps submissions, score, penalty, violations, and question state. The student cannot enter or submit again until an admin calls re-add on the same participant row (`readd_count`, `readded_at`; `exited_at` stays). Removed participants are not re-added. Ctrl+Shift+C still opens the same confirmation when the browser delivers it; it is not the only exit.
+
+**Resume** (`POST /api/admin/contests/:id/resume`) moves a stored `ended` contest back to `running`. The admin must send a future `endTime` or `extendMinutes` counted from server now. `startTime` and `durationMinutes` do not change. `resumed_at` records the resume. `contest.started` means the contest became `running`, including after a resume. Exited and removed participants stay exited and removed. A participant who already started keeps a future personal deadline when it still falls inside the new window, capped at the new contest end. If that deadline already passed because the contest clock stopped them, it moves to the new contest end and `completed` returns to `started` when that end is in the future. A personal deadline that expired while the contest was still open is not extended. Scores, submissions, penalties, violations, and question invalidation are not reset.
+
+The browser cannot lock down OS-level switching; M10 records `visibilitychange` events as `TAB_SWITCH` violations.
 
 Planned next (see `MileStone-doc.md`):
 

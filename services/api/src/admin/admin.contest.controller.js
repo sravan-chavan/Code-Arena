@@ -50,6 +50,14 @@ async function endContest(req, res) {
   return sendSuccess(res, { contest }, 200);
 }
 
+async function resumeContest(req, res) {
+  const contest = await contestService.resumeContest(
+    assertUuid(req.params.id, 'id'),
+    req.body || {},
+  );
+  return sendSuccess(res, { contest }, 200);
+}
+
 async function listQuestions(req, res) {
   const contestId = req.params.id
     ? assertUuid(req.params.id, 'id')
@@ -157,6 +165,14 @@ async function removeParticipant(req, res) {
   return sendSuccess(res, { participant }, 200);
 }
 
+async function readdParticipant(req, res) {
+  const participant = await sessionService.readdParticipant(
+    assertUuid(req.params.id, 'id'),
+    assertUuid(req.params.participantId, 'participantId'),
+  );
+  return sendSuccess(res, { participant }, 200);
+}
+
 async function ranking(req, res) {
   const rankingRows = await submissionService.getAdminRanking(assertUuid(req.params.id, 'id'));
   return sendSuccess(res, { ranking: rankingRows }, 200);
@@ -182,6 +198,7 @@ module.exports = {
   scheduleContest,
   cancelContest,
   endContest,
+  resumeContest,
   listQuestions,
   createQuestion,
   createLibraryQuestion,
@@ -196,6 +213,7 @@ module.exports = {
   getQuestion,
   listParticipants,
   removeParticipant,
+  readdParticipant,
   ranking,
   listSubmissions,
   listViolations,

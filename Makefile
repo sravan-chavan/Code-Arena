@@ -66,9 +66,10 @@ docker-logs-frontend-codearena: ## Follow CodeArena frontend logs
 docker-clean-codearena: ## Stop CodeArena and remove Compose orphans (keeps named volumes)
 	$(COMPOSE) down --remove-orphans
 
-test: ## Run API + Worker unit tests (no PostgreSQL/RabbitMQ required)
+test: ## Run API + Worker + frontend unit tests (no PostgreSQL/RabbitMQ required)
 	@cd services/api && npm test
 	@cd services/worker && npm test
+	@cd apps/frontend && node --test lib/controlledPoll.test.js lib/httpCache.test.js lib/authValidation.test.js lib/contestActions.test.js
 
 test-codearena: ## Run API + Worker unit + PostgreSQL + RabbitMQ integration tests
 	@cd services/api && npm run test:all

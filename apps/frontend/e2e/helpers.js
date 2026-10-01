@@ -31,6 +31,7 @@ async function uiLogin(page, email, password) {
   await page.getByPlaceholder('Email').fill(email);
   await page.getByPlaceholder('Password').fill(password);
   await page.getByRole('button', { name: 'Initialize Session' }).click();
+  await page.waitForURL(/\/(client|admin)/, { timeout: 15000 });
 }
 
 module.exports = {

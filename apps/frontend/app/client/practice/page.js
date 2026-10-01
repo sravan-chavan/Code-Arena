@@ -9,9 +9,10 @@ import { fetchLanguages, formatStatus } from '@/lib/contestsApi';
 import {
   createPracticeExecution,
   fetchPracticeProblems,
+  fetchPracticeSubmission,
   fetchPracticeSubmissions,
-  pollPracticeSubmission,
 } from '@/lib/practiceApi';
+import { awaitExecutionResult } from '@/lib/awaitExecution';
 import { ApiError } from '@/lib/apiClient';
 import { Play, UploadCloud, Code2, Terminal, Clock } from 'lucide-react';
 
@@ -95,7 +96,10 @@ export default function PracticeArea() {
         sourceCode: code,
         kind,
       });
-      const result = await pollPracticeSubmission(created.id);
+      const result = await awaitExecutionResult(
+        created.id,
+        () => fetchPracticeSubmission(created.id),
+      );
       setSubmissionResult(result);
       const lines = [
         `Result: ${formatStatus(result.status)}`,

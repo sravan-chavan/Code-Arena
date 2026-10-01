@@ -87,6 +87,7 @@ describe('Contest lifecycle', () => {
     lifecycle.assertAdminTransition('draft', 'cancelled');
     lifecycle.assertAdminTransition('scheduled', 'cancelled');
     lifecycle.assertAdminTransition('running', 'ended');
+    lifecycle.assertAdminTransition('ended', 'running');
     assert.throws(
       () => lifecycle.assertAdminTransition('scheduled', 'running'),
       (err) => err.statusCode === 409 && err.code === 'INVALID_TRANSITION',
@@ -135,5 +136,70 @@ describe('Contest lifecycle', () => {
     );
     assert.deepEqual(lifecycle.editableFields('ended', 'ended'), []);
     assert.deepEqual(lifecycle.editableFields('cancelled', 'cancelled'), []);
+  });
+
+  it('blocks exited and removed participants and offers resume only after ended', () => {
+    assert.equal(lifecycle.canEnter('running', { status: 'exited' }), false);
+    assert.equal(lifecycle.canEnter('running', { status: 'removed' }), false);
+    assert.deepEqual(lifecycle.allowedAdminActions('ended', 'ended'), ['resume']);
+    assert.deepEqual(lifecycle.allowedAdminActions('running', 'running'), ['update', 'end']);
+    assert.equal(
+      lifecycle.eligibilityForStudent('running', { status: 'exited' }).canEnter,
+      false,
+    );
+  });
+
+  it('keeps exited and removed participants unchanged when a contest resumes', () => {
+    const nowMs = Date.parse('2026-09-30T16:00:00.000Z');
+    const previousEnd = '2026-09-30T15:00:00.000Z';
+    const nextEnd = '2026-09-30T17:00:00.000Z';
+    assert.equal(lifecycle.nextParticipantStateAfterResume({
+      status: 'exited',
+      startedAt: START,
+      effectiveDeadline: previousEnd,
+    }, { previousEndTime: previousEnd, newEndTime: nextEnd, nowMs }), null);
+    assert.equal(lifecycle.nextParticipantStateAfterResume({
+      status: 'removed',
+      startedAt: START,
+      effectiveDeadline: previousEnd,
+    }, { previousEndTime: previousEnd, newEndTime: nextEnd, nowMs }), null);
+  });
+
+  it('extends a contest-capped deadline to the resumed end and leaves an early personal expiry', () => {
+    const nowMs = Date.parse('2026-09-30T16:00:00.000Z');
+    const previousEnd = '2026-09-30T16:00:00.000Z';
+    const nextEnd = '2026-09-30T17:00:00.000Z';
+    const extended = lifecycle.nextParticipantStateAfterResume({
+      status: 'completed',
+      startedAt: START,
+      completedAt: previousEnd,
+      effectiveDeadline: previousEnd,
+    }, { previousEndTime: previousEnd, newEndTime: nextEnd, nowMs });
+    assert.equal(extended.status, 'started');
+    assert.equal(extended.completedAt, null);
+    assert.equal(extended.effectiveDeadline, nextEnd);
+
+    const personal = lifecycle.nextParticipantStateAfterResume({
+      status: 'completed',
+      startedAt: '2026-09-30T12:00:00.000Z',
+      completedAt: '2026-09-30T13:00:00.000Z',
+      effectiveDeadline: '2026-09-30T13:00:00.000Z',
+    }, { previousEndTime: previousEnd, newEndTime: nextEnd, nowMs });
+    assert.equal(personal, null);
+  });
+
+  it('restores an exited participant without clearing the historical exit', () => {
+    clock.setNow('2026-09-30T16:00:00.000Z');
+    const restored = lifecycle.nextParticipantStateAfterReadd({
+      status: 'exited',
+      startedAt: START,
+      effectiveDeadline: '2026-09-30T15:00:00.000Z',
+      score: 15,
+    }, timedContest({ status: 'running', endTime: END }), Date.parse('2026-09-30T16:00:00.000Z'));
+    assert.equal(restored.status, 'started');
+    assert.equal(restored.completedAt, null);
+    assert.equal(restored.effectiveDeadline, END);
+    assert.equal(restored.score, undefined);
+    assert.equal(lifecycle.nextParticipantStateAfterReadd({ status: 'removed' }, timedContest(), Date.parse(START)), null);
   });
 });

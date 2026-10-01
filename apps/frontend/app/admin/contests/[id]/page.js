@@ -7,7 +7,10 @@ import Badge from '@/components/ui/Badge';
 import Button from '@/components/ui/Button';
 import ContestTimer from '@/components/ui/ContestTimer';
 import TestCasePanel from '@/components/ui/TestCasePanel';
+import ConnectionStatus from '@/components/ui/ConnectionStatus';
 import { formatDateTime, isoToLocalInput, localInputToIso } from '@/lib/contestTime';
+import { mergeRanking } from '@/lib/realtimeConfig';
+import { useContestChannel } from '@/lib/useContestChannel';
 import {
   attachAdminQuestions,
   assignmentLabel,
@@ -15,6 +18,8 @@ import {
   cancelAdminContest,
   createAdminQuestion,
   endAdminContest,
+  readdAdminParticipant,
+  resumeAdminContest,
   fetchAdminContest,
   fetchAdminParticipants,
   fetchAdminQuestions,
@@ -29,6 +34,7 @@ import {
   updateAdminQuestion,
 } from '@/lib/contestsApi';
 import { ApiError } from '@/lib/apiClient';
+import { canResumeContest } from '@/lib/contestActions';
 import { ChevronDown, ChevronLeft, ChevronUp } from 'lucide-react';
 
 const emptyQuestion = {
@@ -85,19 +91,23 @@ export default function AdminContestDetail() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [saving, setSaving] = useState(false);
+  const [resumeOpen, setResumeOpen] = useState(false);
+  const [extendMinutes, setExtendMinutes] = useState('');
+  const [readdTarget, setReaddTarget] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal) => {
     if (!id) return;
     setError('');
+    const opts = signal ? { signal } : undefined;
     const [nextContest, nextQuestions, nextParticipants, nextLibrary, nextRanking, nextSubmissions, nextViolations] = await Promise.all([
-      fetchAdminContest(id),
-      fetchAdminQuestions(id),
-      fetchAdminParticipants(id),
-      fetchAdminQuestions(),
-      fetchAdminRanking(id),
-      fetchAdminContestSubmissions(id),
-      fetchAdminViolations(id),
+      fetchAdminContest(id, opts),
+      fetchAdminQuestions(id, opts),
+      fetchAdminParticipants(id, opts),
+      fetchAdminQuestions(undefined, opts),
+      fetchAdminRanking(id, opts),
+      fetchAdminContestSubmissions(id, opts),
+      fetchAdminViolations(id, opts),
     ]);
     setContest(nextContest);
     setQuestions(nextQuestions);
@@ -119,19 +129,162 @@ export default function AdminContestDetail() {
     }));
   }, [id]);
 
+  const onContestEvent = useCallback((event) => {
+    if (!event || event.version !== 1 || !event.payload) return;
+    if (event.type === 'contest.ranking.updated') {
+      if (event.payload.mode === 'snapshot') {
+        setRanking((current) => mergeRanking(current, event.payload.ranking || []));
+      } else if (event.payload.mode === 'invalidate') {
+        fetchAdminRanking(id).then(setRanking).catch(() => {});
+      }
+    }
+    if (event.type === 'participant.score.updated') {
+      setParticipants((current) => current.map((row) => (
+        row.id === event.payload.participantId
+          ? {
+            ...row,
+            score: event.payload.score,
+            penalty: event.payload.penalty,
+            possibleScore: event.payload.possibleScore,
+            solvedCount: event.payload.solvedCount,
+            status: event.payload.status || row.status,
+          }
+          : row
+      )));
+    }
+    if (event.type === 'participant.removed' || event.type === 'participant.status.updated') {
+      setParticipants((current) => current.map((row) => (
+        row.id === event.payload.participantId
+          ? {
+            ...row,
+            status: event.payload.status || row.status,
+            exitedAt: event.payload.exitedAt ?? row.exitedAt,
+            readdedAt: event.payload.readdedAt ?? row.readdedAt,
+            readdCount: event.payload.readdCount ?? row.readdCount,
+          }
+          : row
+      )));
+    }
+    if (event.type === 'contest.violation.detected') {
+      setParticipants((current) => {
+        const match = current.find((row) => row.id === event.payload.participantId);
+        setViolations((rows) => [{
+          id: event.eventId,
+          email: match?.email || '',
+          type: event.payload.type,
+          sequence: event.payload.tabSwitchCount,
+          occurredAt: event.occurredAt,
+          questionId: event.payload.questionId,
+        }, ...rows]);
+        return current.map((row) => (
+          row.id === event.payload.participantId
+            ? { ...row, tabSwitchCount: event.payload.tabSwitchCount }
+            : row
+        ));
+      });
+    }
+    if (
+      event.type === 'submission.queued'
+      || event.type === 'submission.evaluating'
+      || event.type === 'submission.completed'
+      || event.type === 'submission.failed'
+    ) {
+      setSubmissions((current) => {
+        const next = {
+          id: event.payload.submissionId,
+          questionId: event.payload.questionId,
+          kind: event.payload.kind,
+          status: event.payload.status,
+          score: event.payload.score,
+          testsPassed: event.payload.testsPassed,
+          testsTotal: event.payload.testsTotal,
+          createdAt: event.payload.createdAt || event.occurredAt,
+        };
+        const rest = current.filter((row) => row.id !== next.id);
+        return [next, ...rest];
+      });
+    }
+    if (event.type === 'contest.started' || event.type === 'contest.ended' || event.type === 'contest.cancelled') {
+      setContest((current) => (current ? {
+        ...current,
+        status: event.payload.status || current.status,
+        startTime: event.payload.startTime ?? current.startTime,
+        endTime: event.payload.endTime ?? current.endTime,
+        resumedAt: event.payload.resumedAt ?? current.resumedAt,
+        serverTime: event.payload.serverTime || current.serverTime,
+      } : current));
+      fetchAdminContest(id).then(setContest).catch(() => {});
+    }
+  }, [id]);
+
+  const reconcile = useCallback(() => {
+    fetchAdminRanking(id).then(setRanking).catch(() => {});
+    fetchAdminContest(id).then(setContest).catch(() => {});
+  }, [id]);
+
+  const connectionStatus = useContestChannel(id, onContestEvent, { onReconnect: reconcile });
+
   useEffect(() => {
+    const controller = new AbortController();
     let cancelled = false;
     (async () => {
       try {
-        await load();
+        await load(controller.signal);
       } catch (err) {
-        if (!cancelled) setError(err instanceof ApiError ? err.message : 'Unable to load contest.');
+        if (!cancelled && err?.name !== 'AbortError') {
+          setError(err instanceof ApiError ? err.message : 'Unable to load contest.');
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, [load]);
+
+  async function confirmResume() {
+    const minutes = Number.parseInt(extendMinutes, 10);
+    if (!Number.isInteger(minutes) || minutes <= 0) {
+      setError('Enter the number of additional minutes for the resumed contest.');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    setSuccess('');
+    try {
+      const updated = await resumeAdminContest(id, { extendMinutes: minutes });
+      setContest(updated);
+      setParticipants(await fetchAdminParticipants(id));
+      setResumeOpen(false);
+      setExtendMinutes('');
+      setSuccess('Contest resumed.');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Unable to resume contest.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function confirmReadd() {
+    if (!readdTarget) return;
+    setSaving(true);
+    setError('');
+    setSuccess('');
+    try {
+      const updated = await readdAdminParticipant(id, readdTarget.id);
+      setParticipants((current) => current.map((row) => (
+        row.id === updated.id ? { ...row, ...updated } : row
+      )));
+      setReaddTarget(null);
+      setSuccess(`Re-added ${updated.email}. Previous scores and submissions were kept.`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Unable to re-add participant.');
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function runAction(work, okMessage) {
     setSaving(true);
@@ -262,17 +415,25 @@ export default function AdminContestDetail() {
           <div style={{ display: 'flex', gap: 'var(--space-md)', alignItems: 'center', flexWrap: 'wrap' }}>
             <Badge status={contest.status} />
             <ContestTimer contest={contest} onExpired={load} />
+            <ConnectionStatus status={connectionStatus} />
           </div>
         </div>
-        {actions.includes('update') ? (
-          <Button
-            type="button"
-            variant={showEditContest ? 'secondary' : 'primary'}
-            onClick={() => setShowEditContest((open) => !open)}
-          >
-            {showEditContest ? 'Close editor' : 'Edit Contest'}
-          </Button>
-        ) : null}
+        <div style={{ display: 'flex', gap: 'var(--space-sm)', flexWrap: 'wrap' }}>
+          {canResumeContest(contest) ? (
+            <Button type="button" variant="primary" disabled={saving} onClick={() => { setError(''); setResumeOpen(true); }}>
+              Resume Contest
+            </Button>
+          ) : null}
+          {actions.includes('update') ? (
+            <Button
+              type="button"
+              variant={showEditContest ? 'secondary' : 'primary'}
+              onClick={() => setShowEditContest((open) => !open)}
+            >
+              {showEditContest ? 'Close editor' : 'Edit Contest'}
+            </Button>
+          ) : null}
+        </div>
       </div>
       {error ? <p style={{ color: 'var(--accent-rose)' }}>{error}</p> : null}
       {success ? <p style={{ color: 'var(--accent-emerald)' }}>{success}</p> : null}
@@ -338,6 +499,12 @@ export default function AdminContestDetail() {
             <dd>{formatDateTime(contest.startTime)}</dd>
             <dt style={{ color: 'var(--text-secondary)' }}>End</dt>
             <dd>{formatDateTime(contest.endTime)}</dd>
+            {contest.resumedAt ? (
+              <>
+                <dt style={{ color: 'var(--text-secondary)' }}>Resumed</dt>
+                <dd>{formatDateTime(contest.resumedAt)}</dd>
+              </>
+            ) : null}
             <dt style={{ color: 'var(--text-secondary)' }}>Duration</dt>
             <dd>{contest.durationMinutes} minutes</dd>
             <dt style={{ color: 'var(--text-secondary)' }}>Problems</dt>
@@ -565,20 +732,46 @@ export default function AdminContestDetail() {
                       <td>{participant.solvedCount}</td>
                       <td>{participant.tabSwitchCount}</td>
                       <td>
-                        {participant.status !== 'removed' ? (
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            className="btn-sm"
-                            disabled={saving}
-                            onClick={() => runAction(
-                              () => removeAdminParticipant(id, participant.id),
-                              `Removed ${participant.email}.`,
-                            )}
-                          >
-                            Remove student
-                          </Button>
-                        ) : null}
+                        <div style={{ display: 'grid', gap: 4 }}>
+                          {participant.exitedAt ? (
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                              Exited {formatDateTime(participant.exitedAt)}
+                              {participant.readdCount > 0 ? ` · re-added ${participant.readdCount}` : ''}
+                            </span>
+                          ) : null}
+                          {participant.removedAt ? (
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                              Removed {formatDateTime(participant.removedAt)}
+                            </span>
+                          ) : null}
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            {participant.status === 'exited' ? (
+                              <Button
+                                type="button"
+                                variant="primary"
+                                className="btn-sm"
+                                disabled={saving}
+                                onClick={() => setReaddTarget(participant)}
+                              >
+                                Re-add
+                              </Button>
+                            ) : null}
+                            {participant.status !== 'removed' && participant.status !== 'exited' ? (
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                className="btn-sm"
+                                disabled={saving}
+                                onClick={() => runAction(
+                                  () => removeAdminParticipant(id, participant.id),
+                                  `Removed ${participant.email}.`,
+                                )}
+                              >
+                                Remove student
+                              </Button>
+                            ) : null}
+                          </div>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -686,11 +879,61 @@ export default function AdminContestDetail() {
         </Card>
       ) : null}
 
+      {resumeOpen ? (
+        <div role="dialog" aria-modal="true" aria-labelledby="resume-contest-title" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 40, padding: 'var(--space-md)' }}>
+          <div className="card" style={{ maxWidth: 460, width: '100%' }}>
+            <h2 id="resume-contest-title" style={{ fontSize: '1.15rem', marginBottom: 'var(--space-sm)' }}>Resume this contest?</h2>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: 'var(--space-md)' }}>
+              Exited and removed students stay out. Active students continue from the new server deadline.
+            </p>
+            <label htmlFor="resume-minutes" style={{ display: 'grid', gap: 6, marginBottom: 'var(--space-lg)' }}>
+              <span style={{ fontSize: '0.85rem' }}>Additional time</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-sm)' }}>
+                <input
+                  id="resume-minutes"
+                  className="form-input"
+                  type="number"
+                  min="1"
+                  step="1"
+                  placeholder="Minutes until the new end"
+                  value={extendMinutes}
+                  onChange={(event) => setExtendMinutes(event.target.value)}
+                />
+                <span style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>minutes</span>
+              </div>
+            </label>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-sm)' }}>
+              <Button type="button" variant="ghost" disabled={saving} onClick={() => setResumeOpen(false)}>Cancel</Button>
+              <Button type="button" variant="primary" disabled={saving} onClick={confirmResume}>
+                {saving ? 'Resuming…' : 'Resume Contest'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {readdTarget ? (
+        <div role="dialog" aria-modal="true" aria-labelledby="readd-title" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 40, padding: 'var(--space-md)' }}>
+          <div className="card" style={{ maxWidth: 460, width: '100%' }}>
+            <h2 id="readd-title" style={{ fontSize: '1.15rem', marginBottom: 'var(--space-sm)' }}>Re-add {readdTarget.email}?</h2>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: 'var(--space-lg)' }}>
+              They can enter again. Previous submissions, scores, penalties, and violations stay on the record.
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-sm)' }}>
+              <Button type="button" variant="ghost" disabled={saving} onClick={() => setReaddTarget(null)}>Cancel</Button>
+              <Button type="button" variant="primary" disabled={saving} onClick={confirmReadd}>
+                {saving ? 'Re-adding…' : 'Re-add'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {tab === 'lifecycle' ? (
         <Card>
           <h2 className="card-title" style={{ marginBottom: 'var(--space-md)' }}>Lifecycle</h2>
           <p style={{ color: 'var(--text-secondary)', marginBottom: 'var(--space-md)' }}>
-            Only actions valid for the current server-side state are shown. Draft → Schedule, Scheduled → Cancel, Running → End.
+            Only actions valid for the current server-side state are shown. Draft → Schedule, Scheduled → Cancel, Running → End, Ended → Resume.
           </p>
           <div style={{ display: 'flex', gap: 'var(--space-sm)', flexWrap: 'wrap' }}>
             {actions.includes('schedule') ? (
@@ -701,6 +944,9 @@ export default function AdminContestDetail() {
             ) : null}
             {actions.includes('end') ? (
               <Button variant="secondary" disabled={saving} onClick={() => runAction(() => endAdminContest(id), 'Contest ended.')}>End contest</Button>
+            ) : null}
+            {canResumeContest(contest) ? (
+              <Button variant="primary" disabled={saving} onClick={() => { setError(''); setResumeOpen(true); }}>Resume Contest</Button>
             ) : null}
             {actions.length === 0 ? <p style={{ color: 'var(--text-muted)' }}>No lifecycle actions available.</p> : null}
           </div>

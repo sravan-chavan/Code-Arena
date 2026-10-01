@@ -23,8 +23,8 @@ test.describe('M10 test-case points', () => {
     await page.goto('/admin/questions');
     await expect(page.getByText(title)).toBeVisible();
     await page.getByRole('button', { name: 'Edit' }).first().click();
-    await page.getByText('Test Cases').first().click();
-    await expect(page.getByText('10 pts')).toBeVisible();
+    await page.getByRole('button', { name: /Test Cases/ }).first().click();
+    await expect(page.getByText('Test Case 1 · 10 pts')).toBeVisible();
 
     const added = await api(request, 'post', `/admin/questions/${question.id}/test-cases`, {
       token,
@@ -46,7 +46,7 @@ test.describe('M10 test-case points', () => {
     await page.reload();
     await page.getByText(title).click();
     await page.getByRole('button', { name: 'Edit' }).first().click();
-    await page.getByText('Test Cases').first().click();
-    await expect(page.getByText('20 pts')).toBeVisible();
+    await page.getByRole('button', { name: /Test Cases/ }).first().click();
+    await expect(page.getByText('Test Case 1 · 20 pts')).toBeVisible();
   });
 });

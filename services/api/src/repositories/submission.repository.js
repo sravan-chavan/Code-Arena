@@ -180,6 +180,17 @@ async function listContestSubmitsForParticipant(contestId, participantId, client
   return result.rows.map(mapSubmission);
 }
 
+async function markRunning(id, client) {
+  const row = await queryOne(
+    `UPDATE submissions SET status = 'RUNNING', updated_at = NOW()
+     WHERE id = $1 AND status = 'QUEUED'
+     RETURNING *`,
+    [id],
+    client,
+  );
+  return mapSubmission(row);
+}
+
 async function applyResult(id, result, client) {
   const row = await queryOne(
     `UPDATE submissions SET
@@ -280,6 +291,7 @@ module.exports = {
   listByContestAndUser,
   listByContest,
   listContestSubmitsForParticipant,
+  markRunning,
   applyResult,
   replaceTestResults,
   listTestResults,
