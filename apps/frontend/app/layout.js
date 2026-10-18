@@ -5,6 +5,9 @@ export const metadata = {
   title: "CodeArena — Lab-Based Coding Competition Platform",
   description: "A secure, real-time coding competition platform designed for controlled laboratory environments. Conduct fair coding competitions with centralized management.",
   keywords: "coding competition, lab-based, programming contest, CodeArena",
+icons: {
+icon: '/favicon.svg',
+},
 };
 
 export default function RootLayout({ children }) {
