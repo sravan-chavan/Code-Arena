@@ -38,7 +38,7 @@ export default function AdminDashboard() {
     <div>
       <div className="page-header">
         <h1>System Overview</h1>
-        <p>{user?.email} · {user?.role}</p>
+        <p>{user?.email} · {user?.role ? user.role.charAt(0) + user.role.slice(1).toLowerCase() : ''}</p>
       </div>
 
       <Card style={{ marginBottom: 'var(--space-lg)' }}>
