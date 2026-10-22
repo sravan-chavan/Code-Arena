@@ -50,6 +50,28 @@ describe('Judge0 client', () => {
     assert.equal(captured.options.headers['X-Auth-Token'], undefined);
   });
 
+  it('forwards optional stdin, expected_output, and limits on create', async () => {
+    let body;
+    const client = clientWithFetch(async (_url, options) => {
+      body = JSON.parse(options.body);
+      return jsonResponse(201, { token: 'opt-token' });
+    });
+
+    await client.createSubmission({
+      sourceCode: 'print(int(input()) + 1)',
+      languageId: 71,
+      stdin: '2',
+      expectedOutput: '3\n',
+      cpuTimeLimit: 1.5,
+      memoryLimit: 64000,
+    });
+
+    assert.equal(body.stdin, '2');
+    assert.equal(body.expected_output, '3\n');
+    assert.equal(body.cpu_time_limit, 1.5);
+    assert.equal(body.memory_limit, 64000);
+  });
+
   it('sends X-Auth-Token when an auth token is configured', async () => {
     let headers;
     const client = clientWithFetch(async (_url, options) => {
@@ -112,7 +134,7 @@ describe('Judge0 client', () => {
       capturedUrl = url;
       return jsonResponse(200, {
         token: 'abc-token',
-        stdout: 'Hello CodeArena\n',
+        stdout: Buffer.from('Hello CodeArena\n', 'utf8').toString('base64'),
         stderr: null,
         compile_output: null,
         message: null,
@@ -127,7 +149,23 @@ describe('Judge0 client', () => {
     assert.equal(submission.status.id, 3);
     assert.equal(submission.stdout, 'Hello CodeArena\n');
     assert.match(capturedUrl, /\/submissions\/abc-token\?/);
-    assert.match(capturedUrl, /base64_encoded=false/);
+    assert.match(capturedUrl, /base64_encoded=true/);
+  });
+
+  it('decodes non-UTF-8 compiler output instead of failing the poll', async () => {
+    const compileBytes = Buffer.from([0x6d, 0x61, 0x69, 0x6e, 0xff, 0xfe]);
+    const client = clientWithFetch(async () => jsonResponse(200, {
+      token: 'abc-token',
+      stdout: null,
+      stderr: null,
+      compile_output: compileBytes.toString('base64'),
+      message: null,
+      status: { id: 6, description: 'Compilation Error' },
+    }));
+
+    const submission = await client.getSubmission('abc-token');
+    assert.equal(submission.status.id, 6);
+    assert.equal(submission.compile_output, compileBytes.toString('utf8'));
   });
 
   it('throws when getSubmission status.id is missing', async () => {

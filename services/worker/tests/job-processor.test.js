@@ -241,10 +241,87 @@ describe('Job processor', () => {
           status: { id: JUDGE0_STATUS.COMPILATION_ERROR, description: 'Compilation Error' },
         }),
         judge0Config,
+        publishResult: false,
       },
     );
     assert.equal(result.status, EXECUTION_STATUS.COMPILATION_ERROR);
     assert.equal(result.compileOutput, 'SyntaxError');
+  });
+
+  it('maps a terminal runtime error as successful processing', async () => {
+    const message = envelope(pythonHelloPayload({
+      jobId: '00000000-0000-4000-8000-000000000015',
+      sourceCode: 'print(undefined_name)',
+    }));
+    const result = await processJob(message, {
+      judge0Client: acceptedClient({
+        stdout: null,
+        stderr: 'NameError',
+        exit_code: 1,
+        status: { id: JUDGE0_STATUS.RUNTIME_ERROR_NZEC, description: 'Runtime Error (NZEC)' },
+      }),
+      judge0Config,
+      publishResult: false,
+    });
+    assert.equal(result.status, EXECUTION_STATUS.RUNTIME_ERROR);
+    assert.equal(result.stderr, 'NameError');
+  });
+
+  it('maps a terminal time-limit exceeded as successful processing', async () => {
+    const message = envelope(pythonHelloPayload({
+      jobId: '00000000-0000-4000-8000-000000000016',
+      sourceCode: 'while True:\n    pass\n',
+      cpuTimeLimit: 1,
+    }));
+    const result = await processJob(message, {
+      judge0Client: acceptedClient({
+        stdout: null,
+        stderr: null,
+        exit_code: null,
+        status: { id: JUDGE0_STATUS.TIME_LIMIT_EXCEEDED, description: 'Time Limit Exceeded' },
+      }),
+      judge0Config,
+      publishResult: false,
+    });
+    assert.equal(result.status, EXECUTION_STATUS.TIME_LIMIT_EXCEEDED);
+  });
+
+  it('forwards optional stdin and resource limits to Judge0 createSubmission', async () => {
+    let captured;
+    const message = envelope(pythonHelloPayload({
+      jobId: '00000000-0000-4000-8000-000000000017',
+      stdin: '1 2',
+      expectedOutput: '3',
+      cpuTimeLimit: 2.5,
+      memoryLimit: 128000,
+    }));
+    await processJob(message, {
+      judge0Client: {
+        async createSubmission(submission) {
+          captured = submission;
+          return { token: 'tok-limits' };
+        },
+        async getSubmission() {
+          return {
+            token: 'tok-limits',
+            stdout: '3\n',
+            stderr: null,
+            compile_output: null,
+            message: null,
+            exit_code: 0,
+            time: '0.01',
+            memory: 1024,
+            status: { id: JUDGE0_STATUS.ACCEPTED, description: 'Accepted' },
+          };
+        },
+      },
+      judge0Config,
+      publishResult: false,
+    });
+    assert.equal(captured.stdin, '1 2');
+    assert.equal(captured.cpuTimeLimit, 2.5);
+    assert.equal(captured.memoryLimit, 128000);
+    assert.equal(captured.languageId, 71);
   });
 
   it('throws when Judge0 is unavailable so the consumer can NACK/DLQ', async () => {
@@ -262,6 +339,78 @@ describe('Job processor', () => {
         judge0Config,
       }),
       (err) => err.code === 'JUDGE0_UNAVAILABLE',
+    );
+  });
+
+  it('throws on Judge0 HTTP failure so the consumer can NACK/DLQ', async () => {
+    const message = envelope(pythonHelloPayload());
+    await assert.rejects(
+      () => processJob(message, {
+        judge0Client: {
+          async createSubmission() {
+            throw new Judge0Error('Judge0 HTTP 500', {
+              code: 'JUDGE0_HTTP_ERROR',
+              httpStatus: 500,
+            });
+          },
+          async getSubmission() {
+            throw new Error('should not poll');
+          },
+        },
+        judge0Config,
+      }),
+      (err) => err instanceof Judge0Error
+        && err.code === 'JUDGE0_HTTP_ERROR'
+        && err.httpStatus === 500,
+    );
+  });
+
+  it('throws on malformed Judge0 responses so the consumer can NACK/DLQ', async () => {
+    const message = envelope(pythonHelloPayload());
+    await assert.rejects(
+      () => processJob(message, {
+        judge0Client: {
+          async createSubmission() {
+            throw new Judge0Error('Judge0 create submission did not return a token', {
+              code: 'JUDGE0_MALFORMED_RESPONSE',
+            });
+          },
+          async getSubmission() {
+            throw new Error('should not poll');
+          },
+        },
+        judge0Config,
+      }),
+      (err) => err instanceof Judge0Error && err.code === 'JUDGE0_MALFORMED_RESPONSE',
+    );
+  });
+
+  it('throws on poll exhaustion so the consumer can NACK/DLQ', async () => {
+    const message = envelope(pythonHelloPayload());
+    await assert.rejects(
+      () => processJob(message, {
+        judge0Client: {
+          async createSubmission() {
+            return { token: 'tok-stuck' };
+          },
+          async getSubmission() {
+            return {
+              token: 'tok-stuck',
+              stdout: null,
+              stderr: null,
+              compile_output: null,
+              message: null,
+              status: { id: JUDGE0_STATUS.IN_QUEUE, description: 'In Queue' },
+            };
+          },
+        },
+        judge0Config: {
+          ...judge0Config,
+          maxPollAttempts: 2,
+        },
+        sleep: async () => {},
+      }),
+      (err) => err instanceof Judge0Error && err.code === 'JUDGE0_POLL_TIMEOUT',
     );
   });
 
