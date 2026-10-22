@@ -50,6 +50,28 @@ describe('Judge0 client', () => {
     assert.equal(captured.options.headers['X-Auth-Token'], undefined);
   });
 
+  it('forwards optional stdin, expected_output, and limits on create', async () => {
+    let body;
+    const client = clientWithFetch(async (_url, options) => {
+      body = JSON.parse(options.body);
+      return jsonResponse(201, { token: 'opt-token' });
+    });
+
+    await client.createSubmission({
+      sourceCode: 'print(int(input()) + 1)',
+      languageId: 71,
+      stdin: '2',
+      expectedOutput: '3\n',
+      cpuTimeLimit: 1.5,
+      memoryLimit: 64000,
+    });
+
+    assert.equal(body.stdin, '2');
+    assert.equal(body.expected_output, '3\n');
+    assert.equal(body.cpu_time_limit, 1.5);
+    assert.equal(body.memory_limit, 64000);
+  });
+
   it('sends X-Auth-Token when an auth token is configured', async () => {
     let headers;
     const client = clientWithFetch(async (_url, options) => {
