@@ -3,7 +3,6 @@
    Dark Cyberpunk Theme with Glassmorphism
    ============================================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&family=Orbitron:wght@400;500;600;700;800;900&display=swap');
 
 /* ---- CSS Custom Properties ---- */
 :root {
@@ -55,10 +54,9 @@
   --shadow-glow-rose: 0 0 20px rgba(244, 63, 94, 0.15);
 
   /* Typography */
-  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-code: 'JetBrains Mono', 'Fira Code', monospace;
-  --font-display: 'Orbitron', 'Inter', sans-serif;
-
+    --font-body: var(--f-body), -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-code: var(--f-code), 'Fira Code', monospace;
+  --font-display: var(--f-display), var(--f-body), sans-serif;
   /* Spacing */
   --space-xs: 4px;
   --space-sm: 8px;
@@ -267,10 +265,11 @@ img {
 }
 
 .sidebar-brand-text h2 {
-  font-family: var(--font-display);
-  font-size: 1rem;
-  font-weight: 700;
-  letter-spacing: 2px;
+  font-family: var(--f-brand), 'Arial Black', sans-serif;
+  font-size: 1.25rem;
+  font-weight: 400;
+  letter-spacing: 0.5px;
+  line-height: 1.1;
   color: var(--text-primary);
 }
 
@@ -380,12 +379,10 @@ img {
 }
 
 .sidebar-user-role {
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 1px;
+  letter-spacing: 0.5px;
 }
-
 /* ============================================================
    Cards
    ============================================================ */
