@@ -49,7 +49,7 @@ export default function ClientDashboard() {
     <div>
       <div className="page-header">
         <h1>Welcome, {user?.email}</h1>
-        <p>Role: {user?.role}</p>
+        <p>Role: {user?.role ? user.role.charAt(0) + user.role.slice(1).toLowerCase() : ''}</p>
       </div>
 
       <Card style={{ marginBottom: 'var(--space-lg)' }}>

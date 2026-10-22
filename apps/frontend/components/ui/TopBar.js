@@ -31,7 +31,7 @@ export default function TopBar({ title }) {
           <div className="sidebar-user" style={{ padding: 0 }}>
             <div className="sidebar-user-info" style={{ alignItems: 'flex-end', marginRight: 'var(--space-sm)' }}>
               <span className="sidebar-user-name">{user.email}</span>
-              <span className="sidebar-user-role">{user.role}</span>
+            <span className="sidebar-user-role">{user.role.charAt(0) + user.role.slice(1).toLowerCase()}</span>
             </div>
             <div className="sidebar-avatar" style={{ marginRight: 'var(--space-sm)' }}>
               {(user.email || '?').charAt(0).toUpperCase()}
