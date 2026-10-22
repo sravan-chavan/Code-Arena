@@ -23,6 +23,26 @@ const SUBMISSION_FIELDS = [
   'status',
 ].join(',');
 
+const BASE64_TEXT_FIELDS = ['stdout', 'stderr', 'compile_output', 'message'];
+
+/**
+ * Judge0 returns HTTP 400 for base64_encoded=false when compiler output is
+ * not valid UTF-8 (GCC diagnostics include raw bytes). Request Base64 and
+ * decode here so the rest of the worker still sees text.
+ *
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+function decodeBase64Text(value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== 'string') {
+    return null;
+  }
+  return Buffer.from(value, 'base64').toString('utf8');
+}
+
 /**
  * @param {ReturnType<typeof import('./config').loadJudge0Config>} config
  * @param {{ fetch?: typeof fetch }} [deps]
@@ -158,8 +178,11 @@ function createJudge0Client(config, deps = {}) {
 
     const payload = await requestJson(
       'GET',
-      `/submissions/${encodeURIComponent(token)}?base64_encoded=false&fields=${SUBMISSION_FIELDS}`,
+      `/submissions/${encodeURIComponent(token)}?base64_encoded=true&fields=${SUBMISSION_FIELDS}`,
     );
+    for (const field of BASE64_TEXT_FIELDS) {
+      payload[field] = decodeBase64Text(payload[field]);
+    }
 
     const status = payload.status;
     if (!status || typeof status !== 'object' || Array.isArray(status) || !Number.isInteger(status.id)) {

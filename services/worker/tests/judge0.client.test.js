@@ -134,7 +134,7 @@ describe('Judge0 client', () => {
       capturedUrl = url;
       return jsonResponse(200, {
         token: 'abc-token',
-        stdout: 'Hello CodeArena\n',
+        stdout: Buffer.from('Hello CodeArena\n', 'utf8').toString('base64'),
         stderr: null,
         compile_output: null,
         message: null,
@@ -149,7 +149,23 @@ describe('Judge0 client', () => {
     assert.equal(submission.status.id, 3);
     assert.equal(submission.stdout, 'Hello CodeArena\n');
     assert.match(capturedUrl, /\/submissions\/abc-token\?/);
-    assert.match(capturedUrl, /base64_encoded=false/);
+    assert.match(capturedUrl, /base64_encoded=true/);
+  });
+
+  it('decodes non-UTF-8 compiler output instead of failing the poll', async () => {
+    const compileBytes = Buffer.from([0x6d, 0x61, 0x69, 0x6e, 0xff, 0xfe]);
+    const client = clientWithFetch(async () => jsonResponse(200, {
+      token: 'abc-token',
+      stdout: null,
+      stderr: null,
+      compile_output: compileBytes.toString('base64'),
+      message: null,
+      status: { id: 6, description: 'Compilation Error' },
+    }));
+
+    const submission = await client.getSubmission('abc-token');
+    assert.equal(submission.status.id, 6);
+    assert.equal(submission.compile_output, compileBytes.toString('utf8'));
   });
 
   it('throws when getSubmission status.id is missing', async () => {
