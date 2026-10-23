@@ -22,6 +22,14 @@ import {
   reportContestViolation,
   setCurrentQuestion,
 } from '@/lib/contestsApi';
+import {
+  attachArenaProctor,
+  clearIntentionalExit,
+  createProctorState,
+  markFullscreenEngaged,
+  markIntentionalExit,
+  requestArenaFullscreen,
+} from '@/lib/arenaProctoring';
 import { awaitExecutionResult } from '@/lib/awaitExecution';
 import { mergeRanking, submissionView } from '@/lib/realtimeConfig';
 import { useContestChannel } from '@/lib/useContestChannel';
@@ -53,8 +61,14 @@ export default function ContestArena() {
   const [livePhase, setLivePhase] = useState('');
   const [exitOpen, setExitOpen] = useState(false);
   const [exiting, setExiting] = useState(false);
-  const reportingRef = useRef(false);
+  const [fullscreenActive, setFullscreenActive] = useState(false);
+  const [fullscreenError, setFullscreenError] = useState('');
+  const [violationMessage, setViolationMessage] = useState('');
   const sessionStatusRef = useRef(null);
+  const endedRef = useRef(false);
+  const proctorStateRef = useRef(null);
+  const performExitRef = useRef(async () => {});
+  const exitingRef = useRef(false);
   const questionIdRef = useRef(null);
   const executionAbortRef = useRef(null);
 
@@ -224,7 +238,97 @@ export default function ContestArena() {
 
   useEffect(() => {
     sessionStatusRef.current = session?.status || null;
-  }, [session]);
+    endedRef.current = ended;
+  }, [session, ended]);
+
+  const applyViolationPayload = useCallback((payload) => {
+    if (!payload?.session) return;
+    setSession(payload.session);
+    const invalidated = new Set(payload.session.invalidatedQuestionIds || []);
+    if (invalidated.size > 0) {
+      setQuestions((current) => current.map((question) => (
+        invalidated.has(question.id)
+          ? { ...question, invalidated: true, earnedPoints: 0, totalPoints: 0 }
+          : question
+      )));
+    }
+  }, []);
+
+  const performExit = useCallback(async () => {
+    if (exitingRef.current) return;
+    exitingRef.current = true;
+    markIntentionalExit(proctorStateRef.current);
+    setExiting(true);
+    setError('');
+    try {
+      const next = await exitContest(id);
+      setSession(next);
+      setEnded(true);
+      endedRef.current = true;
+      setLockMessage('You exited this contest. You cannot re-enter unless an administrator adds you again.');
+      setExitOpen(false);
+      if (typeof document !== 'undefined' && document.fullscreenElement && document.exitFullscreen) {
+        await document.exitFullscreen().catch(() => {});
+      }
+      router.replace(`/client/contests/${id}`);
+    } catch (err) {
+      clearIntentionalExit(proctorStateRef.current);
+      if (!handleLock(err)) {
+        setError(err instanceof ApiError ? err.message : 'Unable to exit the contest.');
+      } else {
+        setExitOpen(false);
+        router.replace(`/client/contests/${id}`);
+      }
+    } finally {
+      exitingRef.current = false;
+      setExiting(false);
+    }
+  }, [id, router, handleLock]);
+
+  useEffect(() => {
+    performExitRef.current = performExit;
+  }, [performExit]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined' || typeof window === 'undefined') return undefined;
+    const state = createProctorState();
+    proctorStateRef.current = state;
+    if (document.fullscreenElement) {
+      markFullscreenEngaged(state);
+      setFullscreenActive(true);
+    }
+    return attachArenaProctor({ document, window }, {
+      allow: () => {
+        if (endedRef.current) return false;
+        const status = sessionStatusRef.current;
+        return status === 'started' || status === 'registered';
+      },
+      onViolation: async (claim) => {
+        try {
+          const payload = await reportContestViolation(id, claim);
+          applyViolationPayload(payload);
+          setViolationMessage(claim.source === 'fullscreenchange'
+            ? 'You left fullscreen. The question you were on is invalidated and scores 0. Enter fullscreen again to continue with other questions.'
+            : 'You left this contest tab. The question you were on is invalidated and scores 0. You can continue with other questions.');
+        } catch (err) {
+          if (handleLock(err)) return;
+          setViolationMessage(err instanceof ApiError ? err.message : 'Unable to record the proctoring event.');
+          throw err;
+        }
+      },
+      onIntentionalExit: () => {
+        const status = sessionStatusRef.current;
+        if (endedRef.current || (status !== 'started' && status !== 'registered')) {
+          clearIntentionalExit(proctorStateRef.current);
+          return;
+        }
+        performExitRef.current();
+      },
+      onFullscreenChange: ({ active }) => {
+        setFullscreenActive(active);
+      },
+    }, { state });
+  }, [id, applyViolationPayload, handleLock]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -253,68 +357,21 @@ export default function ContestArena() {
     };
   }, [load, handleLock, id]);
 
-  useEffect(() => {
-    function onVisibility() {
-      if (document.visibilityState !== 'hidden' || reportingRef.current || ended) return;
-      reportingRef.current = true;
-      reportContestViolation(id, 'TAB_SWITCH')
-        .then((payload) => {
-          setSession(payload.session);
-          const invalidated = new Set(payload.session?.invalidatedQuestionIds || []);
-          if (invalidated.size > 0) {
-            setQuestions((current) => current.map((question) => (
-              invalidated.has(question.id)
-                ? { ...question, invalidated: true, earnedPoints: 0, totalPoints: 0 }
-                : question
-            )));
-          }
-        })
-        .catch((err) => {
-          if (!handleLock(err)) {
-            setError(err instanceof ApiError ? err.message : 'Unable to record contest event.');
-          }
-        })
-        .finally(() => {
-          reportingRef.current = false;
-        });
+  async function enterFullscreen() {
+    setFullscreenError('');
+    const result = await requestArenaFullscreen(document);
+    await new Promise((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    });
+    if (!result.ok || !document.fullscreenElement) {
+      setFullscreenActive(false);
+      setFullscreenError(result.reason === 'unsupported'
+        ? 'This browser does not support fullscreen. Use a current desktop browser and try again.'
+        : 'Fullscreen was blocked. Allow fullscreen for this site, then try again.');
+      return;
     }
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => document.removeEventListener('visibilitychange', onVisibility);
-  }, [id, ended, handleLock]);
-
-  useEffect(() => {
-    function onKeyDown(event) {
-      if (!(event.ctrlKey && event.shiftKey && (event.key === 'C' || event.key === 'c'))) return;
-      const status = sessionStatusRef.current;
-      if (status !== 'started' && status !== 'registered') return;
-      event.preventDefault();
-      event.stopPropagation();
-      setExitOpen(true);
-    }
-    window.addEventListener('keydown', onKeyDown, true);
-    return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, []);
-
-  async function confirmExit() {
-    setExiting(true);
-    setError('');
-    try {
-      const next = await exitContest(id);
-      setSession(next);
-      setEnded(true);
-      setLockMessage('You exited this contest. You cannot re-enter unless an administrator adds you again.');
-      setExitOpen(false);
-      router.replace(`/client/contests/${id}`);
-    } catch (err) {
-      if (!handleLock(err)) {
-        setError(err instanceof ApiError ? err.message : 'Unable to exit the contest.');
-      } else {
-        setExitOpen(false);
-        router.replace(`/client/contests/${id}`);
-      }
-    } finally {
-      setExiting(false);
-    }
+    markFullscreenEngaged(proctorStateRef.current);
+    setFullscreenActive(true);
   }
 
   async function handleExpired() {
@@ -358,6 +415,13 @@ export default function ContestArena() {
     );
   }
   if (!contest || !session) {
+    if (lockMessage) {
+      return (
+        <div style={{ padding: 'var(--space-xl)' }}>
+          <p data-testid="contest-lock" style={{ color: 'var(--accent-rose)' }}>{lockMessage}</p>
+        </div>
+      );
+    }
     return <div style={{ padding: 'var(--space-xl)', textAlign: 'center', color: 'var(--accent-cyan)' }}>Loading Arena...</div>;
   }
   if (questions.length === 0) {
@@ -371,6 +435,12 @@ export default function ContestArena() {
   const activeQuestion = questions[activeQuestionIndex];
   const closed = ended || contest.status !== 'running' || session.sessionExpired || ['completed', 'exited', 'removed'].includes(session.status);
   const canExit = session.status === 'started' || session.status === 'registered';
+  const showGate = !closed && !fullscreenActive && canExit;
+  const violationNote = violationMessage ? (
+    <p data-testid="proctor-violation" style={{ color: 'var(--accent-rose)', marginBottom: 'var(--space-sm)' }}>
+      {violationMessage}
+    </p>
+  ) : null;
   const questionHistory = history.filter((row) => row.questionId === activeQuestion.id && row.kind === 'submit');
   const you = ranking.find((row) => row.participantId === session.participantId);
 
@@ -477,7 +547,7 @@ export default function ContestArena() {
               <ContestTimer contest={contest} deadline={session.effectiveDeadline} onExpired={handleExpired} />
             </span>
           </div>
-          {canExit ? (
+          {canExit && !showGate ? (
             <Button type="button" variant="secondary" onClick={() => setExitOpen(true)}>
               Exit Contest
             </Button>
@@ -510,7 +580,7 @@ export default function ContestArena() {
               <Button type="button" variant="ghost" disabled={exiting} onClick={() => setExitOpen(false)}>
                 Cancel
               </Button>
-              <Button type="button" variant="secondary" disabled={exiting} onClick={confirmExit}>
+              <Button type="button" variant="secondary" disabled={exiting} onClick={performExit}>
                 <span data-testid="confirm-exit-contest">{exiting ? 'Exiting…' : 'Exit Contest'}</span>
               </Button>
             </div>
@@ -518,6 +588,46 @@ export default function ContestArena() {
         </div>
       ) : null}
 
+      {showGate ? (
+        <div
+          data-testid="fullscreen-gate"
+          role="region"
+          aria-label="Fullscreen required"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.72)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 30,
+            padding: 'var(--space-md)',
+          }}
+        >
+          <div className="card" style={{ maxWidth: 560, width: '100%' }}>
+            <h2 style={{ fontSize: '1.15rem', marginBottom: 'var(--space-sm)' }}>Fullscreen is required</h2>
+            <p data-testid="fullscreen-warning" style={{ color: 'var(--text-secondary)', marginBottom: 'var(--space-md)' }}>
+              Fullscreen is required while you are in the Arena. Switching tabs, minimizing the browser, or leaving fullscreen invalidates the question you are currently on. That question scores 0. Your other questions stay open. Press Ctrl+Shift+C to exit the contest immediately when your browser delivers that shortcut. Exit Contest asks you to confirm, then uses the same exit. After you exit, only an administrator can add you again. This page cannot disable operating-system or browser shortcuts.
+            </p>
+            {violationNote}
+            {fullscreenError ? (
+              <p data-testid="fullscreen-error" style={{ color: 'var(--accent-rose)', marginBottom: 'var(--space-md)' }}>
+                {fullscreenError}
+              </p>
+            ) : null}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-sm)' }}>
+              <Button type="button" variant="secondary" onClick={() => setExitOpen(true)}>
+                Exit Contest
+              </Button>
+              <Button type="button" onClick={enterFullscreen}>
+                <span data-testid="enter-fullscreen">Enter fullscreen</span>
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showGate ? null : violationNote}
       {endingSoon && !closed ? (
         <p style={{ color: 'var(--accent-cyan)', marginBottom: 'var(--space-sm)' }}>Contest ending soon.</p>
       ) : null}

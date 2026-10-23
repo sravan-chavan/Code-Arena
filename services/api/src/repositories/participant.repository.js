@@ -150,6 +150,22 @@ async function findById(id, client) {
   return mapParticipant(row);
 }
 
+async function lockById(id, client) {
+  if (!client) {
+    throw new Error('lockById requires a transaction client');
+  }
+  const row = await queryOne(
+    `SELECT p.*, u.email
+     FROM contest_participants p
+     JOIN users u ON u.id = p.user_id
+     WHERE p.id = $1
+     FOR UPDATE OF p`,
+    [id],
+    client,
+  );
+  return mapParticipant(row);
+}
+
 async function findByContestAndUser(contestId, userId, client) {
   const row = await queryOne(
     `SELECT p.*, u.email
@@ -251,6 +267,7 @@ module.exports = {
   toSession,
   create,
   findById,
+  lockById,
   findByContestAndUser,
   listByContestId,
   listByUserId,

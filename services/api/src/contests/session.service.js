@@ -178,16 +178,42 @@ async function exitContest(user, contestId) {
     });
   }
   const exitedAt = clock.isoNow();
-  const updated = await withTransaction(async (client) => participantRepository.update(participant.id, {
-    status: PARTICIPANT_STATUSES.EXITED,
-    exitedAt,
-    completedAt: participant.completedAt || exitedAt,
-  }, client));
-  console.log(
-    `[API] Contest session exited contestId=${contestId} participantId=${updated.id}`,
-  );
-  require('../realtime/notify').sessionInvalidated(updated, 'SESSION_ENDED');
-  return toSessionPayload(stored, updated);
+  const outcome = await withTransaction(async (client) => {
+    const locked = await participantRepository.lockById(participant.id, client);
+    if (!locked || locked.userId !== user.id) {
+      throw new AppError('You must register for this contest first.', 403, {
+        code: 'REGISTRATION_REQUIRED',
+      });
+    }
+    if (locked.status === PARTICIPANT_STATUSES.REMOVED) {
+      throw new AppError('You have been removed from this contest.', 403, {
+        code: 'PARTICIPANT_REMOVED',
+      });
+    }
+    if (locked.status === PARTICIPANT_STATUSES.EXITED) {
+      return { participant: locked, changed: false };
+    }
+    const stillParticipating = locked.status === PARTICIPANT_STATUSES.STARTED
+      || locked.status === PARTICIPANT_STATUSES.REGISTERED;
+    if (!stillParticipating) {
+      throw new AppError('You are not currently participating in this contest.', 409, {
+        code: 'PARTICIPANT_NOT_ACTIVE',
+      });
+    }
+    const updated = await participantRepository.update(locked.id, {
+      status: PARTICIPANT_STATUSES.EXITED,
+      exitedAt,
+      completedAt: locked.completedAt || exitedAt,
+    }, client);
+    return { participant: updated, changed: true };
+  });
+  if (outcome.changed) {
+    console.log(
+      `[API] Contest session exited contestId=${contestId} participantId=${outcome.participant.id}`,
+    );
+    require('../realtime/notify').sessionInvalidated(outcome.participant, 'SESSION_ENDED');
+  }
+  return toSessionPayload(stored, outcome.participant);
 }
 
 async function setCurrentQuestion(user, contestId, questionId) {
@@ -237,7 +263,11 @@ async function requireActiveSession(user, contest, { allowExpired = false, forEx
   return current;
 }
 
-async function reportTabSwitch(user, contestId) {
+const VIOLATION_SOURCES = new Set(['visibilitychange', 'fullscreenchange']);
+
+async function reportTabSwitch(user, contestId, options = {}) {
+  const source = VIOLATION_SOURCES.has(options.source) ? options.source : 'visibilitychange';
+  const clientEventId = typeof options.clientEventId === 'string' ? options.clientEventId : null;
   const { stored } = await loadLiveContest(contestId);
   const participant = await requireActiveSession(user, stored, { allowExpired: true });
   if (participant.status === PARTICIPANT_STATUSES.REMOVED) {
@@ -247,19 +277,70 @@ async function reportTabSwitch(user, contestId) {
   }
 
   const result = await withTransaction(async (client) => {
-    const questionId = participant.currentQuestionId || null;
-    const sequence = Number(participant.tabSwitchCount || 0) + 1;
+    const locked = await participantRepository.lockById(participant.id, client);
+    if (!locked || locked.userId !== user.id || locked.contestId !== contestId) {
+      throw new AppError('You must register for this contest first.', 403, {
+        code: 'REGISTRATION_REQUIRED',
+      });
+    }
+    if (locked.status === PARTICIPANT_STATUSES.REMOVED) {
+      throw new AppError('You have been removed from this contest.', 403, {
+        code: 'PARTICIPANT_REMOVED',
+      });
+    }
+    if (locked.status === PARTICIPANT_STATUSES.EXITED) {
+      throw new AppError(lifecycle.EXITED_MESSAGE, 403, {
+        code: 'SESSION_ENDED',
+      });
+    }
+    const recordable = locked.status === PARTICIPANT_STATUSES.STARTED
+      || locked.status === PARTICIPANT_STATUSES.REGISTERED
+      || locked.status === PARTICIPANT_STATUSES.COMPLETED;
+    if (!recordable) {
+      throw new AppError('You are not currently participating in this contest.', 409, {
+        code: 'PARTICIPANT_NOT_ACTIVE',
+      });
+    }
+
+    if (clientEventId) {
+      const existingViolation = await violationRepository.findByClientEventId(
+        locked.id,
+        clientEventId,
+        client,
+      );
+      if (existingViolation) {
+        const states = await questionStateRepository.listByParticipant(contestId, locked.id, client);
+        return {
+          duplicate: true,
+          session: toSessionPayload(stored, locked, {
+            invalidatedQuestionIds: states.filter((row) => row.invalidated).map((row) => row.questionId),
+          }),
+          violation: existingViolation,
+          participant: locked,
+          questionId: existingViolation.questionId,
+          sequence: locked.tabSwitchCount,
+          occurredAt: existingViolation.occurredAt,
+        };
+      }
+    }
+
+    const questionId = locked.currentQuestionId || null;
+    const sequence = Number(locked.tabSwitchCount || 0) + 1;
     const occurredAt = clock.isoNow();
     const violation = await violationRepository.create({
       contestId,
-      participantId: participant.id,
+      participantId: locked.id,
       questionId,
       type: 'TAB_SWITCH',
       sequence,
-      metadata: { source: 'visibilitychange' },
+      metadata: {
+        source,
+        clientEventId,
+        blurObserved: options.blurObserved === true,
+      },
     }, client);
 
-    let updated = await participantRepository.update(participant.id, {
+    let updated = await participantRepository.update(locked.id, {
       tabSwitchCount: sequence,
       lastTabSwitchAt: occurredAt,
     }, client);
@@ -268,7 +349,7 @@ async function reportTabSwitch(user, contestId) {
       const testCases = await questionRepository.listTestCases(questionId, client);
       await questionStateRepository.invalidate({
         contestId,
-        participantId: participant.id,
+        participantId: locked.id,
         questionId,
         invalidationReason: 'TAB_SWITCH',
         invalidatedAt: occurredAt,
@@ -281,11 +362,12 @@ async function reportTabSwitch(user, contestId) {
     }
 
     console.log(
-      `[API] Tab switch detected contestId=${contestId} participantId=${updated.id} questionId=${questionId || 'none'} count=${sequence}`,
+      `[API] Tab switch detected contestId=${contestId} participantId=${updated.id} questionId=${questionId || 'none'} count=${sequence} source=${source}`,
     );
 
     const states = await questionStateRepository.listByParticipant(contestId, updated.id, client);
     return {
+      duplicate: false,
       session: toSessionPayload(stored, updated, {
         invalidatedQuestionIds: states.filter((row) => row.invalidated).map((row) => row.questionId),
       }),
@@ -296,19 +378,22 @@ async function reportTabSwitch(user, contestId) {
       occurredAt,
     };
   });
-  const realtime = require('../realtime/notify');
-  realtime.violationDetected({
-    contestId,
-    participant: result.participant,
-    questionId: result.questionId,
-    tabSwitchCount: result.sequence,
-    occurredAt: result.occurredAt,
-  });
-  realtime.participantScore(result.participant);
-  void realtime.rankingUpdated(contestId);
+  if (!result.duplicate) {
+    const realtime = require('../realtime/notify');
+    realtime.violationDetected({
+      contestId,
+      participant: result.participant,
+      questionId: result.questionId,
+      tabSwitchCount: result.sequence,
+      occurredAt: result.occurredAt,
+    });
+    realtime.participantScore(result.participant);
+    await realtime.rankingUpdated(contestId);
+  }
   return {
     session: result.session,
     violation: result.violation,
+    duplicate: Boolean(result.duplicate),
   };
 }
 
@@ -340,25 +425,35 @@ async function readdParticipant(contestId, participantId) {
   if (!participant || participant.contestId !== contestId) {
     throw new AppError('Participant not found', 404, { code: 'NOT_FOUND' });
   }
-  if (participant.status === PARTICIPANT_STATUSES.REMOVED) {
-    throw new AppError(
-      'Removed participants stay removed. Re-add applies only to students who exited.',
-      409,
-      { code: 'PARTICIPANT_NOT_ELIGIBLE' },
-    );
-  }
-  if (participant.status !== PARTICIPANT_STATUSES.EXITED) {
-    throw new AppError('Only an exited participant can be re-added.', 409, {
-      code: 'PARTICIPANT_NOT_ELIGIBLE',
-    });
-  }
-
-  const restored = lifecycle.nextParticipantStateAfterReadd(participant, contest);
-  const updated = await withTransaction(async (client) => participantRepository.update(participant.id, {
-    ...restored,
-    readdedAt: clock.isoNow(),
-    readdCount: Number(participant.readdCount || 0) + 1,
-  }, client));
+  const updated = await withTransaction(async (client) => {
+    const locked = await participantRepository.lockById(participant.id, client);
+    if (!locked || locked.contestId !== contestId) {
+      throw new AppError('Participant not found', 404, { code: 'NOT_FOUND' });
+    }
+    if (locked.status === PARTICIPANT_STATUSES.REMOVED) {
+      throw new AppError(
+        'Removed participants stay removed. Re-add applies only to students who exited.',
+        409,
+        { code: 'PARTICIPANT_NOT_ELIGIBLE' },
+      );
+    }
+    if (locked.status !== PARTICIPANT_STATUSES.EXITED) {
+      throw new AppError('Only an exited participant can be re-added.', 409, {
+        code: 'PARTICIPANT_NOT_ELIGIBLE',
+      });
+    }
+    const restored = lifecycle.nextParticipantStateAfterReadd(locked, contest);
+    if (!restored) {
+      throw new AppError('Only an exited participant can be re-added.', 409, {
+        code: 'PARTICIPANT_NOT_ELIGIBLE',
+      });
+    }
+    return participantRepository.update(locked.id, {
+      ...restored,
+      readdedAt: clock.isoNow(),
+      readdCount: Number(locked.readdCount || 0) + 1,
+    }, client);
+  });
   console.log(
     `[API] Participant re-added contestId=${contestId} participantId=${updated.id} readdCount=${updated.readdCount}`,
   );

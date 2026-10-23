@@ -92,18 +92,25 @@ async function recomputeParticipant(contest, participant, client) {
 }
 
 async function applyQuestionScore(contest, participant, questionId, earnedPoints, client) {
+  if (!client) {
+    throw new Error('applyQuestionScore requires a transaction client');
+  }
+  const locked = await participantRepository.lockById(participant.id, client);
+  if (!locked) {
+    return participant;
+  }
   const testCases = await questionRepository.listTestCases(questionId, client);
   const totalPoints = sumTestCasePoints(testCases);
   const existing = await questionStateRepository.find(
     contest.id,
-    participant.id,
+    locked.id,
     questionId,
     client,
   );
   if (existing && existing.invalidated) {
     await questionStateRepository.upsert({
       contestId: contest.id,
-      participantId: participant.id,
+      participantId: locked.id,
       questionId,
       invalidated: true,
       invalidationReason: existing.invalidationReason,
@@ -111,17 +118,17 @@ async function applyQuestionScore(contest, participant, questionId, earnedPoints
       earnedPoints: 0,
       possiblePoints: 0,
     }, client);
-    return recomputeParticipant(contest, participant, client);
+    return recomputeParticipant(contest, locked, client);
   }
   await questionStateRepository.upsert({
     contestId: contest.id,
-    participantId: participant.id,
+    participantId: locked.id,
     questionId,
     invalidated: false,
     earnedPoints,
     possiblePoints: totalPoints,
   }, client);
-  return recomputeParticipant(contest, participant, client);
+  return recomputeParticipant(contest, locked, client);
 }
 
 module.exports = {

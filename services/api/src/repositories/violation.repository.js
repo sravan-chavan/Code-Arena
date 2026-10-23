@@ -58,6 +58,25 @@ async function listByContest(contestId, client) {
   return result.rows.map(mapViolation);
 }
 
+async function findByClientEventId(participantId, clientEventId, client) {
+  if (!participantId || !clientEventId) {
+    return null;
+  }
+  const row = await queryOne(
+    `SELECT v.*, u.email
+     FROM contest_violations v
+     JOIN contest_participants p ON p.id = v.participant_id
+     JOIN users u ON u.id = p.user_id
+     WHERE v.participant_id = $1
+       AND v.metadata->>'clientEventId' = $2
+     ORDER BY v.occurred_at ASC
+     LIMIT 1`,
+    [participantId, clientEventId],
+    client,
+  );
+  return mapViolation(row);
+}
+
 async function listByParticipant(contestId, participantId, client) {
   const result = await query(
     `SELECT v.*, u.email
@@ -75,6 +94,7 @@ async function listByParticipant(contestId, participantId, client) {
 module.exports = {
   mapViolation,
   create,
+  findByClientEventId,
   listByContest,
   listByParticipant,
 };

@@ -87,7 +87,7 @@ function validateJudge0Config(config) {
   }
   if (!parsed || (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')) {
     const error = new Error(
-      'JUDGE0_URL must be an absolute http or https URL (for example http://host.docker.internal:2358).',
+      'JUDGE0_URL must be an absolute http or https URL (for example http://judge0:2358).',
     );
     error.code = 'JUDGE0_CONFIG_INVALID';
     throw error;

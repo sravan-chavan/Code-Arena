@@ -14,7 +14,7 @@ fi
 
 NGINX_PORT="${NGINX_PORT:-8080}"
 BASE="http://localhost:${NGINX_PORT}"
-COMPOSE="docker compose -p codearena -f docker-compose.yml"
+COMPOSE="docker compose -p codearena -f docker-compose.yml -f infrastructure/judge0/docker-compose.yml"
 
 pass=0
 fail=0
@@ -75,12 +75,17 @@ check_http "api via nginx" "${BASE}/api/health"
 check_http "api v1 via nginx" "${BASE}/api/v1/health"
 check_http "api db via nginx" "${BASE}/api/v1/health/db"
 check_http "worker direct" "http://localhost:${WORKER_PORT:-4001}/health"
+check_http "judge0" "http://localhost:2358/about"
 
 check_compose_health "postgres"
 check_compose_health "rabbitmq"
 check_compose_health "api"
 check_compose_health "worker"
 check_compose_health "frontend"
+check_compose_health "server"
+check_compose_health "workers"
+check_compose_health "db"
+check_compose_health "redis"
 
 echo "======================="
 echo "Passed: $pass  Failed: $fail"

@@ -33,16 +33,17 @@ ensure-env:
 setup: ensure-env ## Prepare local environment (.env from example)
 	@echo "Setup complete. Next: make docker-build-codearena && make docker-up-codearena"
 
-docker-build-codearena: ensure-env ## Build CodeArena Docker images
+docker-build-codearena: ensure-env ## Build local CodeArena images (Judge0 images are prebuilt)
 	$(COMPOSE) build
 
-docker-up-codearena: ensure-env ## Start the CodeArena stack
+docker-up-codearena: ensure-env ## Start CodeArena, including Judge0 and its database and Redis
+	@docker volume inspect judge0_data >/dev/null 2>&1 || docker volume create judge0_data
 	$(COMPOSE) up -d --remove-orphans
 
-docker-down-codearena: ## Stop the CodeArena stack
+docker-down-codearena: ## Stop CodeArena and Judge0 (keeps named volumes)
 	$(COMPOSE) down
 
-docker-restart-codearena: ## Restart the CodeArena stack
+docker-restart-codearena: ## Restart CodeArena and Judge0
 	$(COMPOSE) restart
 
 docker-ps-codearena: ## Show CodeArena service status
@@ -69,7 +70,7 @@ docker-clean-codearena: ## Stop CodeArena and remove Compose orphans (keeps name
 test: ## Run API + Worker + frontend unit tests (no PostgreSQL/RabbitMQ required)
 	@cd services/api && npm test
 	@cd services/worker && npm test
-	@cd apps/frontend && node --test lib/controlledPoll.test.js lib/httpCache.test.js lib/authValidation.test.js lib/contestActions.test.js
+	@cd apps/frontend && node --test lib/controlledPoll.test.js lib/httpCache.test.js lib/authValidation.test.js lib/contestActions.test.js lib/arenaProctoring.test.js
 
 test-codearena: ## Run API + Worker unit + PostgreSQL + RabbitMQ integration tests
 	@cd services/api && npm run test:all
