@@ -2,20 +2,42 @@ const AppError = require('../errors/AppError');
 const contestRepository = require('../repositories/contest.repository');
 const questionRepository = require('../repositories/question.repository');
 const contestService = require('./contest.service');
+const { LANGUAGES } = require('../config/languages');
 const { withTransaction } = require('../db/transaction');
-const { trimRequired } = require('../utils/input');
+const { assertUuid, trimRequired } = require('../utils/input');
 const { parsePoints, sumTestCasePoints } = require('./scoring');
 
 const DIFFICULTIES = new Set(['easy', 'medium', 'hard']);
+const ASSIGNMENTS = new Set(['all', 'unassigned', 'practice', 'contest', 'both', 'archived']);
+const BULK_ACTIONS = new Set(['add-practice', 'remove-practice', 'assign-contests', 'unassign-contests']);
+const LANGUAGE_SUMMARY = LANGUAGES.map((language) => ({
+  slug: language.slug,
+  label: language.label,
+}));
+
+function hasContestAssignment(question) {
+  if (!question) {
+    return false;
+  }
+  if (Array.isArray(question.contests) && question.contests.length > 0) {
+    return true;
+  }
+  return Boolean(question.contestId);
+}
 
 function assignmentOf(question) {
-  if (question && question.isPractice) {
+  if (question && question.archived) {
+    return 'archived';
+  }
+  const inPractice = Boolean(question && question.isPractice);
+  const inContest = hasContestAssignment(question);
+  if (inPractice && inContest) {
+    return 'both';
+  }
+  if (inPractice) {
     return 'practice';
   }
-  if (question && Array.isArray(question.contests) && question.contests.length > 0) {
-    return 'contest';
-  }
-  if (question && question.contestId) {
+  if (inContest) {
     return 'contest';
   }
   return 'unassigned';
@@ -28,6 +50,7 @@ function toAdminQuestion(question) {
     ...question,
     contests,
     contestCount: contests.length,
+    languages: LANGUAGE_SUMMARY,
     assignment: assignmentOf({ ...question, contests }),
     totalPoints: question.totalPoints !== undefined
       ? Number(question.totalPoints)
@@ -43,13 +66,28 @@ function toStudentQuestion(question) {
     assignment,
     contests,
     contestCount,
+    archived,
+    archivedAt,
+    languages,
     ...rest
   } = question;
   return rest;
 }
 
 function toPracticeProblem(question) {
-  const { contestId, contestTitle, isDevelopmentSeed, isPractice, contests, contestCount, assignment, ...rest } = question;
+  const {
+    contestId,
+    contestTitle,
+    isDevelopmentSeed,
+    isPractice,
+    contests,
+    contestCount,
+    assignment,
+    archived,
+    archivedAt,
+    languages,
+    ...rest
+  } = question;
   return rest;
 }
 
@@ -116,10 +154,38 @@ function parseOneTestCase(testCase, index) {
   };
 }
 
-async function createQuestion(contestId, body) {
+function collectContestIds(contestId, body) {
+  const ids = [];
   if (contestId) {
-    await requireContest(contestId);
+    ids.push(contestId);
   }
+  if (body && body.contestIds !== undefined) {
+    if (!Array.isArray(body.contestIds)) {
+      throw new AppError('contestIds must be an array', 400, { code: 'VALIDATION_ERROR' });
+    }
+    for (const id of body.contestIds) {
+      ids.push(assertUuid(id, 'contestIds'));
+    }
+  }
+  return [...new Set(ids)];
+}
+
+function parseIncludeInPractice(body) {
+  if (!body || body.includeInPractice === undefined) {
+    return false;
+  }
+  if (typeof body.includeInPractice !== 'boolean') {
+    throw new AppError('includeInPractice must be a boolean', 400, { code: 'VALIDATION_ERROR' });
+  }
+  return body.includeInPractice;
+}
+
+async function createQuestion(contestId, body) {
+  const contestIds = collectContestIds(contestId, body);
+  for (const id of contestIds) {
+    await requireContest(id);
+  }
+  const includeInPractice = parseIncludeInPractice(body);
   const title = trimRequired(body.title, 'title', 200);
   const difficulty = body.difficulty || 'easy';
   if (!DIFFICULTIES.has(difficulty)) {
@@ -127,11 +193,11 @@ async function createQuestion(contestId, body) {
   }
   const testCases = parseTestCases(body.testCases);
   return withTransaction(async (client) => {
-    const sortOrder = contestId
-      ? await questionRepository.nextSortOrder(contestId, client)
+    const sortOrder = contestIds.length === 1
+      ? await questionRepository.nextSortOrder(contestIds[0], client)
       : await questionRepository.nextUnassignedSortOrder(client);
     const question = await questionRepository.create({
-      contestId: contestId || null,
+      contestId: contestIds[0] || null,
       title,
       description: typeof body.description === 'string' ? body.description : '',
       inputFormat: typeof body.inputFormat === 'string' ? body.inputFormat : '',
@@ -147,8 +213,20 @@ async function createQuestion(contestId, body) {
       sortOrder,
     }, client);
 
-    if (contestId) {
-      await questionRepository.assignToContest(question.id, contestId, sortOrder, client);
+    if (includeInPractice) {
+      await questionRepository.setPractice(question.id, true, client);
+    }
+
+    for (const id of contestIds) {
+      const order = id === contestIds[0] && contestIds.length === 1
+        ? sortOrder
+        : await questionRepository.nextSortOrder(id, client);
+      const inserted = await questionRepository.attachIfAbsent(question.id, id, order, client);
+      if (!inserted) {
+        throw new AppError('Question already belongs to this contest', 409, {
+          code: 'QUESTION_ALREADY_ATTACHED',
+        });
+      }
     }
 
     const createdCases = [];
@@ -162,7 +240,7 @@ async function createQuestion(contestId, body) {
     const loaded = await questionRepository.findById(question.id, client);
     return toAdminQuestion({
       ...loaded,
-      contestId: contestId || null,
+      contestId: contestIds[0] || null,
       testCases: createdCases,
       ...sampleFromCases(createdCases),
     });
@@ -173,9 +251,9 @@ function assertAttachable(question, contestId) {
   if (!question) {
     throw new AppError('Question not found', 404, { code: 'NOT_FOUND' });
   }
-  if (question.isPractice) {
-    throw new AppError('Practice questions cannot be attached to a contest.', 409, {
-      code: 'PRACTICE_QUESTION',
+  if (question.archived) {
+    throw new AppError('Archived questions cannot be assigned to a contest.', 409, {
+      code: 'QUESTION_ARCHIVED',
     });
   }
   const already = question.contestId === contestId
@@ -204,6 +282,11 @@ async function attachQuestion(contestId, questionId) {
       sortOrder,
       client,
     );
+    if (!attached) {
+      throw new AppError('Question already belongs to this contest', 409, {
+        code: 'QUESTION_ALREADY_ATTACHED',
+      });
+    }
     return toAdminQuestion(await attachCases({ ...attached, contestId, sortOrder }, { includeHidden: true }));
   });
 }
@@ -234,6 +317,11 @@ async function attachQuestions(contestId, questionIds) {
         sortOrder,
         client,
       );
+      if (!row) {
+        throw new AppError('Question already belongs to this contest', 409, {
+          code: 'QUESTION_ALREADY_ATTACHED',
+        });
+      }
       attached.push(await attachCases({ ...row, contestId, sortOrder }, { includeHidden: true }));
     }
     return attached.map(toAdminQuestion);
@@ -476,7 +564,7 @@ async function getStudentQuestion(user, contestId, questionId) {
   await contestService.assertArenaAccess(user, contestId);
   const question = await questionRepository.findById(questionId);
   const attached = question && await questionRepository.isAttached(contestId, questionId);
-  if (!question || question.isPractice || !attached) {
+  if (!question || !attached) {
     throw new AppError('Question not found', 404, { code: 'NOT_FOUND' });
   }
   const mapped = toStudentQuestion(await attachCases({ ...question, contestId }, { includeHidden: false }));
@@ -503,7 +591,7 @@ async function listPracticeProblems() {
 
 async function getPracticeProblem(questionId) {
   const question = await questionRepository.findById(questionId);
-  if (!question || !question.isPractice) {
+  if (!question || !question.isPractice || question.archived) {
     throw new AppError('Practice problem not found', 404, { code: 'NOT_FOUND' });
   }
   return toPracticeProblem(await attachCases(question, { includeHidden: false }));
@@ -511,7 +599,9 @@ async function getPracticeProblem(questionId) {
 
 async function getQuestionForExecution(questionId) {
   const question = await questionRepository.findById(questionId);
-  if (!question || question.isPractice) {
+  // Practice-only rows are not contest questions. A question that is also
+  // assigned to a contest stays executable through the contest path.
+  if (!question || (question.isPractice && !hasContestAssignment(question))) {
     throw new AppError('Question not found', 404, { code: 'NOT_FOUND' });
   }
   const testCases = await questionRepository.listTestCases(questionId);
@@ -520,11 +610,345 @@ async function getQuestionForExecution(questionId) {
 
 async function getPracticeQuestionForExecution(questionId) {
   const question = await questionRepository.findById(questionId);
-  if (!question || !question.isPractice) {
+  if (!question || !question.isPractice || question.archived) {
     throw new AppError('Practice problem not found', 404, { code: 'NOT_FOUND' });
   }
   const testCases = await questionRepository.listTestCases(questionId);
   return { question, testCases };
+}
+
+function parseUuidList(value, field, { required = true } = {}) {
+  if (value === undefined || value === null) {
+    if (!required) {
+      return [];
+    }
+    throw new AppError(`${field} must be a non-empty array`, 400, { code: 'VALIDATION_ERROR' });
+  }
+  if (!Array.isArray(value)) {
+    throw new AppError(`${field} must be an array`, 400, { code: 'VALIDATION_ERROR' });
+  }
+  if (required && value.length === 0) {
+    throw new AppError(`${field} must be a non-empty array`, 400, { code: 'VALIDATION_ERROR' });
+  }
+  if (value.length > 100) {
+    throw new AppError(`${field} is too large`, 400, { code: 'VALIDATION_ERROR' });
+  }
+  const ids = value.map((item) => assertUuid(item, field));
+  if (new Set(ids).size !== ids.length) {
+    throw new AppError(`${field} must not contain duplicates`, 400, { code: 'VALIDATION_ERROR' });
+  }
+  return ids;
+}
+
+function parseLibraryQuery(query) {
+  const source = query || {};
+  const q = typeof source.q === 'string' ? source.q.trim().slice(0, 200) : '';
+  let difficulty = '';
+  if (source.difficulty !== undefined && source.difficulty !== '' && source.difficulty !== 'all') {
+    if (!DIFFICULTIES.has(source.difficulty)) {
+      throw new AppError('difficulty is invalid', 400, { code: 'VALIDATION_ERROR' });
+    }
+    difficulty = source.difficulty;
+  }
+  const assignment = source.assignment === undefined || source.assignment === ''
+    ? 'all'
+    : source.assignment;
+  if (!ASSIGNMENTS.has(assignment)) {
+    throw new AppError('assignment is invalid', 400, { code: 'VALIDATION_ERROR' });
+  }
+  let page;
+  let pageSize;
+  if (source.page !== undefined && source.page !== '') {
+    page = Number(source.page);
+    if (!Number.isInteger(page) || page < 1) {
+      throw new AppError('page must be a positive integer', 400, { code: 'VALIDATION_ERROR' });
+    }
+    pageSize = source.pageSize === undefined || source.pageSize === '' ? 25 : Number(source.pageSize);
+    if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) {
+      throw new AppError('pageSize must be an integer from 1 to 100', 400, { code: 'VALIDATION_ERROR' });
+    }
+  }
+  return { q, difficulty, assignment, page, pageSize };
+}
+
+async function presentAdmin(questionId, client) {
+  const loaded = await questionRepository.findById(questionId, client);
+  if (!loaded) {
+    throw new AppError('Question not found', 404, { code: 'NOT_FOUND' });
+  }
+  return toAdminQuestion(await attachCases(loaded, { includeHidden: true }));
+}
+
+function historyBlocksRemoval(history) {
+  return Boolean(history && (history.submissions > 0 || history.states > 0));
+}
+
+async function assertContestsExist(contestIds) {
+  for (const contestId of contestIds) {
+    await requireContest(contestId);
+  }
+}
+
+async function searchAdminQuestions(query) {
+  const parsed = parseLibraryQuery(query);
+  const found = await questionRepository.searchLibrary({
+    q: parsed.q,
+    difficulty: parsed.difficulty,
+    assignment: parsed.assignment,
+    limit: parsed.page ? parsed.pageSize : undefined,
+    offset: parsed.page ? (parsed.page - 1) * parsed.pageSize : undefined,
+  });
+  const withCases = await Promise.all(
+    found.questions.map((question) => attachCases(question, { includeHidden: true })),
+  );
+  const payload = { questions: withCases.map(toAdminQuestion) };
+  if (parsed.page) {
+    payload.pagination = {
+      page: parsed.page,
+      pageSize: parsed.pageSize,
+      total: found.total,
+      pageCount: Math.max(1, Math.ceil(found.total / parsed.pageSize)),
+    };
+  }
+  return payload;
+}
+
+async function updatePlacement(questionId, body) {
+  const source = body || {};
+  const includeInPractice = source.includeInPractice;
+  if (includeInPractice !== undefined && typeof includeInPractice !== 'boolean') {
+    throw new AppError('includeInPractice must be a boolean', 400, { code: 'VALIDATION_ERROR' });
+  }
+  const addContestIds = parseUuidList(source.addContestIds, 'addContestIds', { required: false });
+  const removeContestIds = parseUuidList(source.removeContestIds, 'removeContestIds', { required: false });
+  if (includeInPractice === undefined && addContestIds.length === 0 && removeContestIds.length === 0) {
+    throw new AppError('No placement changes were provided', 400, { code: 'VALIDATION_ERROR' });
+  }
+  const overlap = addContestIds.filter((id) => removeContestIds.includes(id));
+  if (overlap.length > 0) {
+    throw new AppError('A contest cannot be added and removed in the same request', 400, {
+      code: 'VALIDATION_ERROR',
+    });
+  }
+  await assertContestsExist([...addContestIds, ...removeContestIds]);
+  return withTransaction(async (client) => {
+    const question = await questionRepository.lockById(questionId, client);
+    if (!question) {
+      throw new AppError('Question not found', 404, { code: 'NOT_FOUND' });
+    }
+    if (question.archived) {
+      throw new AppError('Archived questions cannot change placement.', 409, {
+        code: 'QUESTION_ARCHIVED',
+      });
+    }
+    const blocked = [];
+    for (const contestId of removeContestIds) {
+      const history = await questionRepository.countContestHistory(questionId, contestId, client);
+      if (historyBlocksRemoval(history)) {
+        blocked.push({
+          questionId,
+          contestId,
+          message: 'This contest already has submissions for the question.',
+        });
+      }
+    }
+    if (blocked.length > 0) {
+      throw new AppError(
+        'This question cannot be removed from a contest that already has submissions. Nothing was changed.',
+        409,
+        { code: 'CONTEST_QUESTION_HAS_HISTORY', errors: blocked },
+      );
+    }
+    if (includeInPractice !== undefined) {
+      await questionRepository.setPractice(questionId, includeInPractice, client);
+    }
+    for (const contestId of removeContestIds) {
+      await questionRepository.detachFromContest(contestId, questionId, client);
+    }
+    const alreadyAssigned = [];
+    for (const contestId of addContestIds) {
+      const sortOrder = await questionRepository.nextSortOrder(contestId, client);
+      const inserted = await questionRepository.attachIfAbsent(questionId, contestId, sortOrder, client);
+      if (!inserted) {
+        alreadyAssigned.push({ questionId, contestId });
+      }
+    }
+    return {
+      question: await presentAdmin(questionId, client),
+      summary: { alreadyAssigned },
+    };
+  });
+}
+
+async function bulkManage(body) {
+  const source = body || {};
+  if (!BULK_ACTIONS.has(source.action)) {
+    throw new AppError('action is invalid', 400, { code: 'VALIDATION_ERROR' });
+  }
+  const questionIds = parseUuidList(source.questionIds, 'questionIds');
+  const needsContests = source.action === 'assign-contests' || source.action === 'unassign-contests';
+  const contestIds = needsContests
+    ? parseUuidList(source.contestIds, 'contestIds')
+    : [];
+  if (needsContests) {
+    await assertContestsExist(contestIds);
+  }
+  return withTransaction(async (client) => {
+    const locked = [];
+    for (const questionId of questionIds) {
+      const question = await questionRepository.lockById(questionId, client);
+      if (!question) {
+        throw new AppError('Question not found', 404, { code: 'NOT_FOUND' });
+      }
+      if (question.archived) {
+        throw new AppError('Archived questions cannot change placement.', 409, {
+          code: 'QUESTION_ARCHIVED',
+          errors: [{ questionId, message: 'Question is archived.' }],
+        });
+      }
+      locked.push(question);
+    }
+
+    if (source.action === 'unassign-contests') {
+      const blocked = [];
+      for (const questionId of questionIds) {
+        for (const contestId of contestIds) {
+          const history = await questionRepository.countContestHistory(questionId, contestId, client);
+          if (historyBlocksRemoval(history)) {
+            blocked.push({
+              questionId,
+              contestId,
+              message: 'This contest already has submissions for the question.',
+            });
+          }
+        }
+      }
+      if (blocked.length > 0) {
+        throw new AppError(
+          'Some questions cannot be removed because those contests already have submissions. Nothing was changed.',
+          409,
+          { code: 'CONTEST_QUESTION_HAS_HISTORY', errors: blocked },
+        );
+      }
+    }
+
+    const alreadyAssigned = [];
+    for (const question of locked) {
+      if (source.action === 'add-practice') {
+        await questionRepository.setPractice(question.id, true, client);
+      } else if (source.action === 'remove-practice') {
+        await questionRepository.setPractice(question.id, false, client);
+      } else if (source.action === 'assign-contests') {
+        for (const contestId of contestIds) {
+          const sortOrder = await questionRepository.nextSortOrder(contestId, client);
+          const inserted = await questionRepository.attachIfAbsent(
+            question.id,
+            contestId,
+            sortOrder,
+            client,
+          );
+          if (!inserted) {
+            alreadyAssigned.push({ questionId: question.id, contestId });
+          }
+        }
+      } else if (source.action === 'unassign-contests') {
+        for (const contestId of contestIds) {
+          await questionRepository.detachFromContest(contestId, question.id, client);
+        }
+      }
+    }
+
+    const questions = [];
+    for (const questionId of questionIds) {
+      questions.push(await presentAdmin(questionId, client));
+    }
+    return {
+      questions,
+      summary: {
+        updated: questionIds.length,
+        alreadyAssigned,
+      },
+    };
+  });
+}
+
+async function detachQuestion(contestId, questionId) {
+  await requireContest(contestId);
+  return withTransaction(async (client) => {
+    const question = await questionRepository.lockById(questionId, client);
+    if (!question) {
+      throw new AppError('Question not found', 404, { code: 'NOT_FOUND' });
+    }
+    const history = await questionRepository.countContestHistory(questionId, contestId, client);
+    if (historyBlocksRemoval(history)) {
+      throw new AppError(
+        'This question cannot be removed from the contest because submissions already exist. The question and its scores were left unchanged.',
+        409,
+        {
+          code: 'CONTEST_QUESTION_HAS_HISTORY',
+          errors: [{ questionId, contestId, message: 'Submissions exist for this contest assignment.' }],
+        },
+      );
+    }
+    const removed = await questionRepository.detachFromContest(contestId, questionId, client);
+    if (!removed) {
+      throw new AppError('Question is not assigned to this contest', 404, { code: 'NOT_FOUND' });
+    }
+    return presentAdmin(questionId, client);
+  });
+}
+
+function questionHasHistory(history) {
+  return Boolean(
+    history
+    && (history.submissions > 0 || history.states > 0 || history.violations > 0),
+  );
+}
+
+async function deleteQuestion(questionId) {
+  return withTransaction(async (client) => {
+    const question = await questionRepository.lockById(questionId, client);
+    if (!question) {
+      throw new AppError('Question not found', 404, { code: 'NOT_FOUND' });
+    }
+    const history = await questionRepository.countQuestionHistory(questionId, client);
+    if (questionHasHistory(history)) {
+      throw new AppError(
+        'This question has submissions or other contest history, so it cannot be permanently deleted. Archive it instead. Archiving removes it from Practice Arena and keeps historical submissions.',
+        409,
+        { code: 'QUESTION_HAS_HISTORY' },
+      );
+    }
+    await questionRepository.deleteById(questionId, client);
+    return { id: questionId, deleted: true };
+  });
+}
+
+async function archiveQuestion(questionId) {
+  return withTransaction(async (client) => {
+    const question = await questionRepository.lockById(questionId, client);
+    if (!question) {
+      throw new AppError('Question not found', 404, { code: 'NOT_FOUND' });
+    }
+    const contestIds = await questionRepository.listMembershipContestIds(questionId, client);
+    const retainedContestIds = [];
+    const removedContestIds = [];
+    for (const contestId of contestIds) {
+      const history = await questionRepository.countContestHistory(questionId, contestId, client);
+      if (historyBlocksRemoval(history)) {
+        retainedContestIds.push(contestId);
+      } else {
+        await questionRepository.detachFromContest(contestId, questionId, client);
+        removedContestIds.push(contestId);
+      }
+    }
+    await questionRepository.archive(questionId, client);
+    return {
+      question: await presentAdmin(questionId, client),
+      retainedContestIds,
+      removedContestIds,
+    };
+  });
 }
 
 module.exports = {
@@ -547,4 +971,10 @@ module.exports = {
   getQuestionForExecution,
   getPracticeQuestionForExecution,
   toPracticeProblem,
+  searchAdminQuestions,
+  updatePlacement,
+  bulkManage,
+  detachQuestion,
+  deleteQuestion,
+  archiveQuestion,
 };

@@ -112,9 +112,79 @@ async function create(input, client) {
   }
 }
 
+function escapeLike(value) {
+  return `%${String(value).replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
+}
+
+/**
+ * Search and role filters only. Values are bound as parameters.
+ * An empty filter matches every registered account.
+ */
+function buildUserFilters({ search, role } = {}) {
+  const clauses = [];
+  const params = [];
+  if (typeof search === 'string' && search.trim() !== '') {
+    params.push(escapeLike(search.trim()));
+    clauses.push(`email ILIKE $${params.length} ESCAPE '\\'`);
+  }
+  if (typeof role === 'string' && role !== '') {
+    params.push(role);
+    clauses.push(`role = $${params.length}`);
+  }
+  return {
+    where: clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '',
+    params,
+  };
+}
+
+/**
+ * Registered-account count. No status exclusion: users has no account-status column.
+ * @param {{ search?: string, role?: string }} [filters]
+ * @param {import('pg').PoolClient} [client]
+ */
+async function count(filters = {}, client) {
+  const { where, params } = buildUserFilters(filters);
+  const row = await queryOne(
+    `SELECT COUNT(*)::int AS total FROM users ${where}`,
+    params,
+    client,
+  );
+  return Number(row.total);
+}
+
+/**
+ * One page of public user rows. password_hash is never selected.
+ * @param {{ search?: string, role?: string, limit: number, offset: number }} input
+ * @param {import('pg').PoolClient} [client]
+ */
+async function list(input, client) {
+  const limit = Number(input.limit);
+  const offset = Number(input.offset);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error('limit must be an integer from 1 to 100');
+  }
+  if (!Number.isInteger(offset) || offset < 0) {
+    throw new Error('offset must be a non-negative integer');
+  }
+
+  const { where, params } = buildUserFilters(input);
+  const result = await query(
+    `SELECT id, email, role, created_at, updated_at
+     FROM users
+     ${where}
+     ORDER BY created_at DESC, id DESC
+     LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+    [...params, limit, offset],
+    client,
+  );
+  return result.rows.map(mapPublic);
+}
+
 module.exports = {
   findById,
   findByEmail,
   findByEmailWithPasswordHash,
   create,
+  count,
+  list,
 };

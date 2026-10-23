@@ -42,6 +42,10 @@ function mapQuestion(row) {
     sortOrder,
     isPractice: Boolean(row.is_practice),
     isDevelopmentSeed: Boolean(row.is_development_seed),
+    archived: row.archived_at != null,
+    archivedAt: row.archived_at instanceof Date
+      ? row.archived_at.toISOString()
+      : (row.archived_at || null),
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : row.updated_at,
   };
@@ -251,6 +255,7 @@ async function listPractice(client) {
     `SELECT q.*
      FROM questions q
      WHERE q.is_practice = TRUE
+       AND q.archived_at IS NULL
      ORDER BY q.sort_order ASC, q.created_at ASC`,
     [],
     client,
@@ -367,14 +372,199 @@ async function isAttached(contestId, questionId, client) {
 }
 
 async function attachToContest(questionId, contestId, sortOrder, client) {
-  await queryOne(
+  const row = await queryOne(
     `INSERT INTO contest_questions (contest_id, question_id, sort_order)
      VALUES ($1, $2, $3)
+     ON CONFLICT (contest_id, question_id) DO NOTHING
      RETURNING contest_id`,
     [contestId, questionId, sortOrder],
     client,
   );
+  if (!row) {
+    return null;
+  }
   return findById(questionId, client);
+}
+
+async function attachIfAbsent(questionId, contestId, sortOrder, client) {
+  const row = await queryOne(
+    `INSERT INTO contest_questions (contest_id, question_id, sort_order)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (contest_id, question_id) DO NOTHING
+     RETURNING contest_id`,
+    [contestId, questionId, sortOrder],
+    client,
+  );
+  return Boolean(row);
+}
+
+async function detachFromContest(contestId, questionId, client) {
+  const row = await queryOne(
+    `DELETE FROM contest_questions
+     WHERE contest_id = $1 AND question_id = $2
+     RETURNING question_id`,
+    [contestId, questionId],
+    client,
+  );
+  return Boolean(row);
+}
+
+async function setPractice(id, isPractice, client) {
+  const row = await queryOne(
+    `UPDATE questions
+     SET is_practice = $2, updated_at = NOW()
+     WHERE id = $1
+     RETURNING id`,
+    [id, Boolean(isPractice)],
+    client,
+  );
+  return Boolean(row);
+}
+
+async function archive(id, client) {
+  const row = await queryOne(
+    `UPDATE questions
+     SET archived_at = COALESCE(archived_at, NOW()),
+         is_practice = FALSE,
+         updated_at = NOW()
+     WHERE id = $1
+     RETURNING id`,
+    [id],
+    client,
+  );
+  return Boolean(row);
+}
+
+async function deleteById(id, client) {
+  const row = await queryOne(
+    `DELETE FROM questions WHERE id = $1 RETURNING id`,
+    [id],
+    client,
+  );
+  return Boolean(row);
+}
+
+async function listMembershipContestIds(questionId, client) {
+  const result = await query(
+    `SELECT contest_id
+     FROM contest_questions
+     WHERE question_id = $1
+     ORDER BY contest_id`,
+    [questionId],
+    client,
+  );
+  return result.rows.map((row) => row.contest_id);
+}
+
+async function countQuestionHistory(questionId, client) {
+  const row = await queryOne(
+    `SELECT
+       (SELECT COUNT(*)::int FROM submissions WHERE question_id = $1) AS submissions,
+       (SELECT COUNT(*)::int FROM participant_question_states WHERE question_id = $1) AS states,
+       (SELECT COUNT(*)::int FROM contest_violations WHERE question_id = $1) AS violations`,
+    [questionId],
+    client,
+  );
+  return {
+    submissions: Number(row.submissions),
+    states: Number(row.states),
+    violations: Number(row.violations),
+  };
+}
+
+async function countContestHistory(questionId, contestId, client) {
+  const row = await queryOne(
+    `SELECT
+       (SELECT COUNT(*)::int FROM submissions WHERE question_id = $1 AND contest_id = $2) AS submissions,
+       (SELECT COUNT(*)::int FROM participant_question_states WHERE question_id = $1 AND contest_id = $2) AS states`,
+    [questionId, contestId],
+    client,
+  );
+  return {
+    submissions: Number(row.submissions),
+    states: Number(row.states),
+  };
+}
+
+function escapeLike(value) {
+  return `%${String(value).replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
+}
+
+function assignmentPredicate(assignment) {
+  if (assignment === 'archived') {
+    return 'q.archived_at IS NOT NULL';
+  }
+  if (assignment === 'unassigned') {
+    return `q.archived_at IS NULL
+      AND q.is_practice = FALSE
+      AND NOT EXISTS (SELECT 1 FROM contest_questions cq WHERE cq.question_id = q.id)`;
+  }
+  if (assignment === 'practice') {
+    return `q.archived_at IS NULL
+      AND q.is_practice = TRUE
+      AND NOT EXISTS (SELECT 1 FROM contest_questions cq WHERE cq.question_id = q.id)`;
+  }
+  if (assignment === 'contest') {
+    return `q.archived_at IS NULL
+      AND q.is_practice = FALSE
+      AND EXISTS (SELECT 1 FROM contest_questions cq WHERE cq.question_id = q.id)`;
+  }
+  if (assignment === 'both') {
+    return `q.archived_at IS NULL
+      AND q.is_practice = TRUE
+      AND EXISTS (SELECT 1 FROM contest_questions cq WHERE cq.question_id = q.id)`;
+  }
+  return '';
+}
+
+async function searchLibrary({ q, difficulty, assignment, limit, offset }, client) {
+  const params = [];
+  const where = [];
+  if (q) {
+    params.push(escapeLike(q));
+    where.push(`(
+      q.title ILIKE $${params.length} ESCAPE '\\'
+      OR q.description ILIKE $${params.length} ESCAPE '\\'
+      OR q.constraints_text ILIKE $${params.length} ESCAPE '\\'
+      OR q.input_format ILIKE $${params.length} ESCAPE '\\'
+      OR q.output_format ILIKE $${params.length} ESCAPE '\\'
+    )`);
+  }
+  if (difficulty) {
+    params.push(difficulty);
+    where.push(`q.difficulty = $${params.length}`);
+  }
+  const assignmentSql = assignmentPredicate(assignment);
+  if (assignmentSql) {
+    where.push(assignmentSql);
+  }
+  const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+  const countRow = await queryOne(
+    `SELECT COUNT(*)::int AS n FROM questions q ${whereSql}`,
+    params,
+    client,
+  );
+  const listParams = params.slice();
+  let paging = '';
+  if (Number.isInteger(limit)) {
+    listParams.push(limit);
+    paging += ` LIMIT $${listParams.length}`;
+    listParams.push(Number.isInteger(offset) ? offset : 0);
+    paging += ` OFFSET $${listParams.length}`;
+  }
+  const result = await query(
+    `SELECT q.*, ${CONTEST_AGG}
+     FROM questions q
+     ${whereSql}
+     ORDER BY q.created_at DESC
+     ${paging}`,
+    listParams,
+    client,
+  );
+  return {
+    questions: result.rows.map(mapQuestion),
+    total: Number(countRow.n),
+  };
 }
 
 async function assignToContest(id, contestId, sortOrder, client) {
@@ -590,6 +780,15 @@ module.exports = {
   lockById,
   isAttached,
   attachToContest,
+  attachIfAbsent,
+  detachFromContest,
+  setPractice,
+  archive,
+  deleteById,
+  listMembershipContestIds,
+  countQuestionHistory,
+  countContestHistory,
+  searchLibrary,
   assignToContest,
   updateSortOrder,
   update,

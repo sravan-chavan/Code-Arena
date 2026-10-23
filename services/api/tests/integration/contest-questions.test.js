@@ -161,7 +161,7 @@ describe('Contest questions many-to-many (PostgreSQL)', () => {
     assert.equal(next[contestB.id], 0);
   });
 
-  it('attaches multiple questions in one transaction and rolls back on a practice id', async () => {
+  it('attaches multiple questions in one transaction and rolls back when one id is missing', async () => {
     const contest = await createDraft();
     const a = await request(app)
       .post('/admin/questions')
@@ -186,9 +186,6 @@ describe('Contest questions many-to-many (PostgreSQL)', () => {
       ['Batch A', 'Batch B'],
     );
 
-    const practice = await query(
-      `SELECT id FROM questions WHERE is_practice = TRUE AND is_development_seed = TRUE LIMIT 1`,
-    );
     const extra = await request(app)
       .post('/admin/questions')
       .set('Authorization', `Bearer ${adminToken}`)
@@ -200,9 +197,9 @@ describe('Contest questions many-to-many (PostgreSQL)', () => {
       .post(`/admin/contests/${contest.id}/questions/batch`)
       .set('Authorization', `Bearer ${adminToken}`)
       .send({
-        questionIds: [extra.body.data.question.id, practice.rows[0].id],
+        questionIds: [extra.body.data.question.id, '00000000-0000-4000-8000-000000000099'],
       })
-      .expect(409);
+      .expect(404);
 
     const leftover = await query(
       `SELECT 1 FROM contest_questions WHERE contest_id = $1 AND question_id = $2`,

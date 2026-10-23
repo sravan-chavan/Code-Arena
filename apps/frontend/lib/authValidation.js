@@ -3,27 +3,31 @@ const MIN_PASSWORD_LENGTH = 8;
 const MAX_PASSWORD_LENGTH = 72;
 const MAX_EMAIL_LENGTH = 254;
 
-function validateRegistration({ email, password, confirmPassword }) {
+function registrationFieldErrors({ email, password, confirmPassword } = {}) {
+  const errors = {};
   if (typeof email !== 'string' || email.trim() === '') {
-    return 'email is required';
-  }
-  const normalized = email.trim().toLowerCase();
-  if (normalized.length > MAX_EMAIL_LENGTH || !EMAIL_PATTERN.test(normalized)) {
-    return 'email must be a valid email address';
+    errors.email = 'email is required';
+  } else {
+    const normalized = email.trim().toLowerCase();
+    if (normalized.length > MAX_EMAIL_LENGTH || !EMAIL_PATTERN.test(normalized)) {
+      errors.email = 'email must be a valid email address';
+    }
   }
   if (typeof password !== 'string' || password.length === 0) {
-    return 'password is required';
+    errors.password = 'password is required';
+  } else if (password.length < MIN_PASSWORD_LENGTH) {
+    errors.password = `password must be at least ${MIN_PASSWORD_LENGTH} characters`;
+  } else if (password.length > MAX_PASSWORD_LENGTH) {
+    errors.password = `password must be at most ${MAX_PASSWORD_LENGTH} characters`;
+  } else if (password !== confirmPassword) {
+    errors.confirmPassword = 'Passwords do not match.';
   }
-  if (password.length < MIN_PASSWORD_LENGTH) {
-    return `password must be at least ${MIN_PASSWORD_LENGTH} characters`;
-  }
-  if (password.length > MAX_PASSWORD_LENGTH) {
-    return `password must be at most ${MAX_PASSWORD_LENGTH} characters`;
-  }
-  if (password !== confirmPassword) {
-    return 'Passwords do not match.';
-  }
-  return null;
+  return errors;
+}
+
+function validateRegistration(input) {
+  const errors = registrationFieldErrors(input);
+  return errors.email || errors.password || errors.confirmPassword || null;
 }
 
 module.exports = {
@@ -31,5 +35,6 @@ module.exports = {
   MIN_PASSWORD_LENGTH,
   MAX_PASSWORD_LENGTH,
   MAX_EMAIL_LENGTH,
+  registrationFieldErrors,
   validateRegistration,
 };

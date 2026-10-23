@@ -1,6 +1,8 @@
 const express = require('express');
 const adminController = require('./admin.controller');
+const adminUserController = require('./admin.user.controller');
 const contestController = require('./admin.contest.controller');
+const { validateRegister } = require('../auth/auth.validators');
 const authenticate = require('../middleware/authentication.middleware');
 const requireRole = require('../middleware/authorization.middleware');
 const asyncHandler = require('../utils/async-handler');
@@ -11,6 +13,14 @@ const requireAdmin = [authenticate, requireRole(ROLES.ADMIN)];
 
 router.get('/me', ...requireAdmin, asyncHandler(adminController.me));
 router.get('/dashboard', ...requireAdmin, asyncHandler(adminController.dashboard));
+router.get('/users/count', ...requireAdmin, asyncHandler(adminUserController.countUsers));
+router.get('/users', ...requireAdmin, asyncHandler(adminUserController.listUsers));
+router.post(
+  '/users',
+  ...requireAdmin,
+  validateRegister,
+  asyncHandler(adminUserController.registerUser),
+);
 router.get('/contests', ...requireAdmin, asyncHandler(contestController.listContests));
 router.post('/contests', ...requireAdmin, asyncHandler(contestController.createContest));
 router.get('/contests/:id', ...requireAdmin, asyncHandler(contestController.getContest));
@@ -31,12 +41,17 @@ router.get('/contests/:id/ranking', ...requireAdmin, asyncHandler(contestControl
 router.get('/contests/:id/submissions', ...requireAdmin, asyncHandler(contestController.listSubmissions));
 router.get('/contests/:id/violations', ...requireAdmin, asyncHandler(contestController.listViolations));
 router.get('/questions', ...requireAdmin, asyncHandler(contestController.listQuestions));
+router.post('/questions/bulk', ...requireAdmin, asyncHandler(contestController.bulkManageQuestions));
 router.post('/questions', ...requireAdmin, asyncHandler(contestController.createLibraryQuestion));
 router.get('/questions/:questionId/test-cases', ...requireAdmin, asyncHandler(contestController.listTestCases));
 router.post('/questions/:questionId/test-cases', ...requireAdmin, asyncHandler(contestController.createTestCase));
 router.patch('/questions/:questionId/test-cases/:testCaseId', ...requireAdmin, asyncHandler(contestController.updateTestCase));
 router.delete('/questions/:questionId/test-cases/:testCaseId', ...requireAdmin, asyncHandler(contestController.deleteTestCase));
 router.get('/questions/:questionId', ...requireAdmin, asyncHandler(contestController.getQuestion));
+router.patch('/questions/:questionId/placement', ...requireAdmin, asyncHandler(contestController.updatePlacement));
 router.patch('/questions/:questionId', ...requireAdmin, asyncHandler(contestController.updateQuestion));
+router.delete('/questions/:questionId', ...requireAdmin, asyncHandler(contestController.deleteQuestion));
+router.post('/questions/:questionId/archive', ...requireAdmin, asyncHandler(contestController.archiveQuestion));
+router.delete('/contests/:id/questions/:questionId', ...requireAdmin, asyncHandler(contestController.detachQuestion));
 
 module.exports = router;
