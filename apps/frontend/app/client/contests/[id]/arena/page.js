@@ -67,7 +67,7 @@ export default function ContestArena() {
   const sessionStatusRef = useRef(null);
   const endedRef = useRef(false);
   const proctorStateRef = useRef(null);
-  const performExitRef = useRef(async () => {});
+  const performExitRef = useRef(async () => { });
   const exitingRef = useRef(false);
   const questionIdRef = useRef(null);
   const executionAbortRef = useRef(null);
@@ -122,7 +122,7 @@ export default function ContestArena() {
       if (event.payload?.mode === 'snapshot') {
         setRanking((current) => mergeRanking(current, event.payload.ranking || []));
       } else if (event.payload?.mode === 'invalidate') {
-        fetchStudentRanking(id).then(setRanking).catch(() => {});
+        fetchStudentRanking(id).then(setRanking).catch(() => { });
       }
     }
     if (event.type === 'participant.score.updated' && event.payload) {
@@ -268,7 +268,7 @@ export default function ContestArena() {
       setLockMessage('You exited this contest. You cannot re-enter unless an administrator adds you again.');
       setExitOpen(false);
       if (typeof document !== 'undefined' && document.fullscreenElement && document.exitFullscreen) {
-        await document.exitFullscreen().catch(() => {});
+        await document.exitFullscreen().catch(() => { });
       }
       router.replace(`/client/contests/${id}`);
     } catch (err) {
@@ -607,7 +607,7 @@ export default function ContestArena() {
           <div className="card" style={{ maxWidth: 560, width: '100%' }}>
             <h2 style={{ fontSize: '1.15rem', marginBottom: 'var(--space-sm)' }}>Fullscreen is required</h2>
             <p data-testid="fullscreen-warning" style={{ color: 'var(--text-secondary)', marginBottom: 'var(--space-md)' }}>
-              Fullscreen is required while you are in the Arena. Switching tabs, minimizing the browser, or leaving fullscreen invalidates the question you are currently on. That question scores 0. Your other questions stay open. Press Ctrl+Shift+C to exit the contest immediately when your browser delivers that shortcut. Exit Contest asks you to confirm, then uses the same exit. After you exit, only an administrator can add you again. This page cannot disable operating-system or browser shortcuts.
+              Fullscreen is required while you are in the Arena. Switching tabs, minimizing the browser, or leaving fullscreen invalidates the question you are currently on. Your Tab switch will be recorded and action will be taken. Your other questions stay open. Exit Contest asks you to confirm, then uses exit. After you exit, only an administrator can add you again. This page cannot disable operating-system or browser shortcuts.
             </p>
             {violationNote}
             {fullscreenError ? (
