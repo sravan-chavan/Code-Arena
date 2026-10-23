@@ -108,16 +108,47 @@ async function setCurrentQuestion(req, res) {
   return sendSuccess(res, { session }, 200);
 }
 
-async function reportViolation(req, res) {
-  const type = (req.body || {}).type;
+const VIOLATION_SOURCES = new Set(['visibilitychange', 'fullscreenchange']);
+const CLIENT_EVENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function readViolationOptions(body) {
+  const type = body.type;
   if (type !== 'TAB_SWITCH') {
     throw new AppError('type must be TAB_SWITCH', 400, { code: 'VALIDATION_ERROR' });
   }
+  let source = 'visibilitychange';
+  if (Object.prototype.hasOwnProperty.call(body, 'source') && body.source != null) {
+    if (typeof body.source !== 'string' || !VIOLATION_SOURCES.has(body.source)) {
+      throw new AppError(
+        'source must be visibilitychange or fullscreenchange',
+        400,
+        { code: 'VALIDATION_ERROR' },
+      );
+    }
+    source = body.source;
+  }
+  let clientEventId = null;
+  if (Object.prototype.hasOwnProperty.call(body, 'clientEventId') && body.clientEventId != null) {
+    if (typeof body.clientEventId !== 'string' || !CLIENT_EVENT_ID.test(body.clientEventId)) {
+      throw new AppError('clientEventId must be a UUID', 400, { code: 'VALIDATION_ERROR' });
+    }
+    clientEventId = body.clientEventId.toLowerCase();
+  }
+  return {
+    source,
+    clientEventId,
+    blurObserved: body.blurObserved === true,
+  };
+}
+
+async function reportViolation(req, res) {
+  const options = readViolationOptions(req.body || {});
   const payload = await sessionService.reportTabSwitch(
     req.user,
     assertUuid(req.params.id, 'id'),
+    options,
   );
-  return sendSuccess(res, payload, 201);
+  return sendSuccess(res, payload, payload.duplicate ? 200 : 201);
 }
 
 async function ranking(req, res) {

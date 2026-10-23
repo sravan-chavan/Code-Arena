@@ -1,3 +1,15 @@
+# Judge0 CE for the CodeArena stack.
+#
+# The root Makefile includes this file with docker-compose.yml. Paths below are
+# relative to the repository root because Compose resolves them from the first
+# -f file. Do not start this file as its own project.
+#
+# Images are prebuilt. `make docker-build-codearena` does not rebuild them.
+# `make docker-up-codearena` pulls an image only when it is missing locally.
+#
+# judge0.conf supplies Judge0's own Postgres and Redis settings. CodeArena
+# application secrets stay in the root .env.
+
 x-logging:
   &default-logging
   logging:
@@ -8,43 +20,91 @@ x-logging:
 services:
   server:
     image: mrkushalsm/judge0:latest
+    container_name: codearena-judge0
     volumes:
-      - ./judge0.conf:/judge0.conf:ro
+      - ./infrastructure/judge0/judge0.conf:/judge0.conf:ro
     ports:
       - "2358:2358"
     privileged: true
     <<: *default-logging
-    restart: always
-
+    restart: unless-stopped
+    networks:
+      codearena:
+        aliases:
+          - judge0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2358/about"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
 
   workers:
     image: mrkushalsm/judge0:latest
+    container_name: codearena-judge0-workers
     command: ["./scripts/workers"]
     volumes:
-      - ./judge0.conf:/judge0.conf:ro
+      - ./infrastructure/judge0/judge0.conf:/judge0.conf:ro
     privileged: true
     cgroup: host
     <<: *default-logging
-    restart: always
-
+    restart: unless-stopped
+    networks:
+      - codearena
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'resque:workers' >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 40s
 
   db:
     image: postgres:16.2
-    env_file: judge0.conf
+    container_name: codearena-judge0-db
+    env_file: infrastructure/judge0/judge0.conf
     volumes:
       - data:/var/lib/postgresql/data/
     <<: *default-logging
-    restart: always
+    restart: unless-stopped
+    networks:
+      - codearena
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 10s
 
   redis:
     image: redis:7.2.4
+    container_name: codearena-judge0-redis
     command: [
       "bash", "-c",
       'docker-entrypoint.sh --appendonly no --requirepass "$$REDIS_PASSWORD"'
     ]
-    env_file: judge0.conf
+    env_file: infrastructure/judge0/judge0.conf
     <<: *default-logging
-    restart: always
+    restart: unless-stopped
+    networks:
+      - codearena
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 10s
 
 volumes:
   data:
+    name: judge0_data
+    external: true

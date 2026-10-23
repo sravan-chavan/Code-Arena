@@ -47,7 +47,7 @@ Service boundaries:
 - **Worker** is a separate Node.js service that consumes RabbitMQ execution jobs and runs them on Judge0.
 - **PostgreSQL** and **RabbitMQ** provide approved infrastructure.
 - **Nginx** is the local HTTP entry point.
-- **Judge0** is external for M7 (Compose service remains commented out). The Worker reaches it via `JUDGE0_URL`.
+- **Judge0** runs in Compose with the rest of the stack. The Worker reaches it at `http://judge0:2358` on `codearena-network`.
 - `apps/admin` and `apps/client` remain as Milestone 0 source skeletons and are **not** deployed.
 
 ## Docker architecture
@@ -61,16 +61,18 @@ Browser
 
 postgres (volume: codearena_postgres_data)
 rabbitmq + management UI
-worker (RabbitMQ execution consumer → Judge0)
+worker (RabbitMQ execution consumer → judge0:2358)
+judge0 API + isolate workers
+judge0 Postgres (volume: judge0_data) and Redis
 ```
 
-All Compose operations use project name `codearena`:
+All Compose operations use project name `codearena` and both Compose files:
 
 ```bash
-docker compose -p codearena -f docker-compose.yml
+docker compose -p codearena -f docker-compose.yml -f infrastructure/judge0/docker-compose.yml
 ```
 
-Judge0 is **not** started by Compose in Milestone 7. Run Judge0 separately and set `JUDGE0_URL`.
+`make docker-up-codearena` starts Judge0 with CodeArena. Judge0's API, workers, database, and Redis are prebuilt images. `make docker-build-codearena` builds only the local CodeArena images (frontend, API, worker). The first `docker-up` pulls a missing Judge0 image; later builds do not download it again. The Judge0 database volume `judge0_data` is created if it is missing and is not removed by `make docker-down-codearena`.
 
 ## Repository structure
 
@@ -92,7 +94,7 @@ CodeArena/
 │   ├── nginx/          Nginx reverse-proxy config
 │   ├── postgres/       Reserved (API owns migrations)
 │   ├── rabbitmq/       Reserved for future queue config
-│   └── judge0/         Deferred Judge0 integration
+│   └── judge0/         Judge0 CE Compose file, included by the Makefile
 ├── scripts/            Developer helper scripts
 ├── Makefile            Primary developer interface
 ├── common.mk           Shared Make configuration
@@ -162,7 +164,7 @@ Key variables:
 | `RABBITMQ_CONSUMER_ENABLED` | Worker: when `true` (default), consume `codearena.execution`. API Compose sets this `false` so the API does not consume the *request* queue. The API still consumes `codearena.execution.results` so the UI can poll Judge0 outcomes |
 | `RABBITMQ_RECONNECT_ENABLED` | Worker runtime reconnect. Compose enables it for worker |
 | `CODEARENA_SERVICE_NAME` | Messaging log prefix / AMQP `appId` (`api` or `worker`) |
-| `JUDGE0_URL` | Worker: base URL of an **external** Judge0 CE instance (required). Compose default is `http://host.docker.internal:2358` |
+| `JUDGE0_URL` | Worker: Judge0 base URL. Compose default is `http://judge0:2358` on the CodeArena network |
 | `JUDGE0_AUTH_TOKEN` | Worker: Judge0 `X-Auth-Token`. Leave empty when Judge0 auth is disabled |
 | `JUDGE0_POLL_INTERVAL_MS` | Worker: delay between GET /submissions/{token} polls (default `1000`) |
 | `JUDGE0_MAX_POLL_ATTEMPTS` | Worker: hard cap on polls (default `30`). Exhaustion NACKs the job to the DLQ |
@@ -183,6 +185,7 @@ Host ports map into container ports. Prefer changing **host** bindings in `.env`
 | `5432` (`POSTGRES_PORT`) | `5432` | PostgreSQL |
 | `5672` (`RABBITMQ_PORT`) | `5672` | RabbitMQ AMQP |
 | `15672` (`RABBITMQ_MANAGEMENT_PORT`) | `15672` | RabbitMQ management UI |
+| `2358` | `2358` | Judge0 API (`server`, network alias `judge0`) |
 
 Prefer Nginx (`http://localhost:8080`) for application access.
 
@@ -193,7 +196,7 @@ CodeArena may share a machine with other Docker Compose projects (for example Ph
 - Compose project name: `codearena` (`-p codearena`)
 - Container names prefixed with `codearena-`
 - Network: `codearena-network`
-- Named volumes: `codearena_postgres_data`, `codearena_rabbitmq_data`
+- Named volumes: `codearena_postgres_data`, `codearena_rabbitmq_data`, `judge0_data`
 - Make targets namespaced with `-codearena`
 
 ## CodeArena-specific Make commands
@@ -204,10 +207,10 @@ Docker lifecycle targets are explicitly namespaced so they cannot be confused wi
 | ------- | ----------- |
 | `make help` | List targets and recommended workflow |
 | `make setup` | Create `.env` from `.env.example` if missing |
-| `make docker-build-codearena` | Build CodeArena images |
-| `make docker-up-codearena` | Start the CodeArena stack |
-| `make docker-down-codearena` | Stop the CodeArena stack |
-| `make docker-restart-codearena` | Restart CodeArena services |
+| `make docker-build-codearena` | Build local CodeArena images. Judge0 images are prebuilt and are not rebuilt |
+| `make docker-up-codearena` | Start CodeArena and Judge0 |
+| `make docker-down-codearena` | Stop CodeArena and Judge0. Named volumes are kept |
+| `make docker-restart-codearena` | Restart CodeArena and Judge0 |
 | `make docker-ps-codearena` | Show CodeArena status |
 | `make docker-logs-codearena` | Follow all CodeArena logs |
 | `make docker-logs-api-codearena` | Follow API logs |
@@ -300,7 +303,10 @@ make docker-down-codearena
 | `worker` | Worker process | M7: consumes `codearena.execution`, submits to Judge0, polls, maps status, ACK/DLQ |
 | `postgres` | Database | Application database; API-owned migrations |
 | `rabbitmq` | Message broker | Shared topology: events exchange, system + execution queues, DLX/DLQs |
-| `judge0` | Execution engine | External for M7 (Compose service commented out) |
+| `server` | Judge0 API | Prebuilt `mrkushalsm/judge0`, alias `judge0:2358` |
+| `workers` | Judge0 isolate workers | Same prebuilt image; runs `./scripts/workers` |
+| `db` | Judge0 database | Postgres 16.2, volume `judge0_data`. Not the CodeArena database |
+| `redis` | Judge0 queue | Redis 7.2.4 used only by Judge0 |
 
 ## Troubleshooting
 
@@ -329,7 +335,7 @@ This is a Docker Desktop / WSL credential helper environment issue, not a CodeAr
 **Compose file validation**
 
 ```bash
-docker compose -f docker-compose.yml config
+docker compose -p codearena -f docker-compose.yml -f infrastructure/judge0/docker-compose.yml config --quiet
 ```
 
 **Permission / path issues on `/mnt/d`**  
@@ -354,13 +360,13 @@ From the CodeArena guardrails skill:
 
 The API remains the RabbitMQ **producer**. The Worker consumes `codearena.execution`, validates the M6 envelope plus M7 Judge0 fields (`jobId`, `sourceCode`, `languageId`, optional `stdin` / `expectedOutput` / `cpuTimeLimit` / `memoryLimit`), submits `POST /submissions?base64_encoded=false&wait=false`, polls `GET /submissions/{token}` until a terminal Judge0 status, maps that status into a CodeArena execution result, then returns so the shared consumer **ACKs**. Judge0 HTTP failures, malformed responses, and poll exhaustion **NACK** to the execution DLQ (M6 semantics). Terminal verdicts such as compilation or runtime errors are successful processing (ACK) with a mapped status.
 
-Judge0 stays **outside** Compose. Point `JUDGE0_URL` at a running Judge0 CE instance. An empty `JUDGE0_AUTH_TOKEN` omits the `X-Auth-Token` header.
+Judge0 starts with the Compose stack. The Worker uses `JUDGE0_URL` (`http://judge0:2358` on `codearena-network`). An empty `JUDGE0_AUTH_TOKEN` omits the `X-Auth-Token` header.
 
 M7 Judge0 processing is unchanged. Contests, questions, test cases, and submissions are persisted in PostgreSQL (migrations `004`–`006`). The Worker publishes `codearena.execution.started` when evaluation begins and `codearena.execution.completed` when it finishes. The API consumes that results queue and notifies the browser over WebSocket. A bounded HTTP poll remains only when the socket is unavailable.
 
 **Milestone 8 — Practice Mode**
 
-Practice problems are stored in the existing `questions` table with `is_practice = TRUE` and `contest_id` NULL. They do not belong to a contest. Practice Run/Submit uses the same M7 execution contract: API persists a `QUEUED` submission, publishes `codearena.execution.requested`, the Worker talks to Judge0, and the API results consumer writes the terminal status. The Student Practice Area loads problems from PostgreSQL and polls real submission state. Judge0 remains external; Compose still does not start it.
+Practice problems are stored in the existing `questions` table with `is_practice = TRUE` and `contest_id` NULL. They do not belong to a contest. Practice Run/Submit uses the same M7 execution contract: API persists a `QUEUED` submission, publishes `codearena.execution.requested`, the Worker talks to Judge0, and the API results consumer writes the terminal status. The Student Practice Area loads problems from PostgreSQL and polls real submission state. Judge0 is the Compose service included from `infrastructure/judge0/docker-compose.yml`.
 
 Student practice endpoints (Bearer JWT + `STUDENT`):
 
@@ -405,7 +411,7 @@ Timestamps: PostgreSQL `TIMESTAMPTZ` and API bodies/responses are ISO-8601 UTC (
 
 ### Manual Judge0 execution
 
-Start CodeArena (`make docker-up-codearena`) and a Judge0 CE instance that the Worker can reach via `JUDGE0_URL`. Then publish one job through the API producer path:
+Start the stack with `make docker-up-codearena`. That starts Judge0 on the network the Worker already uses. Then publish one job through the API producer path:
 
 ```bash
 # Host (from services/api so @codearena/messaging resolves)
@@ -521,7 +527,7 @@ Copy `.env.example` to `.env` (never commit `.env`). The API reads:
 | `JUDGE0_POLL_INTERVAL_MS` | `1000` | Poll delay |
 | `JUDGE0_MAX_POLL_ATTEMPTS` | `30` | Poll cap |
 
-Do not use `localhost` for container-to-container access; the api service must use the Compose hostname `postgres`. The Worker must not use `localhost` for Judge0 when Judge0 runs on the host — use `host.docker.internal` (Compose sets `extra_hosts` for this).
+Do not use `localhost` for container-to-container access. The API uses the Compose hostname `postgres`. The Worker uses `http://judge0:2358`, the network alias of the Judge0 API service.
 
 ### Migrations
 
@@ -604,11 +610,9 @@ Test-case points default to **10** in PostgreSQL. Question and contest totals ar
 
 The login page has Login/Register tabs. Register uses the existing `POST /api/auth/register` contract (`email`, `password`), validates email/password/confirm-password in the browser, then signs the student in with `POST /api/auth/login`. The server always stores `STUDENT` and ignores a client-supplied role.
 
-The Contest Arena has a visible **Exit Contest** confirmation. Exiting persists `exited` and `exited_at`, closes that participation, and keeps submissions, score, penalty, violations, and question state. The student cannot enter or submit again until an admin calls re-add on the same participant row (`readd_count`, `readded_at`; `exited_at` stays). Removed participants are not re-added. Ctrl+Shift+C still opens the same confirmation when the browser delivers it; it is not the only exit.
+The Contest Arena asks for browser fullscreen with a button click, because the Fullscreen API requires a user gesture. Switching tabs, minimizing, or leaving fullscreen records one `TAB_SWITCH` for that action and invalidates only the current question: its earned and possible points stay 0, including when a later evaluation result arrives. Other questions stay open. A refresh does not record a violation; the student enters fullscreen again and the server session is unchanged. `Ctrl+Shift+C` exits immediately when the browser delivers it. **Exit Contest** still asks for confirmation and then uses the same exit. A page cannot disable operating-system shortcuts. Exiting persists `exited` and `exited_at`, closes that participation, and keeps submissions, score, penalty, violations, and question state. The student cannot enter or submit again until an admin calls re-add on the same participant row (`readd_count`, `readded_at`; `exited_at` stays). Removed participants are not re-added. Repeating a violation with the same `clientEventId` does not record it twice.
 
 **Resume** (`POST /api/admin/contests/:id/resume`) moves a stored `ended` contest back to `running`. The admin must send a future `endTime` or `extendMinutes` counted from server now. `startTime` and `durationMinutes` do not change. `resumed_at` records the resume. `contest.started` means the contest became `running`, including after a resume. Exited and removed participants stay exited and removed. A participant who already started keeps a future personal deadline when it still falls inside the new window, capped at the new contest end. If that deadline already passed because the contest clock stopped them, it moves to the new contest end and `completed` returns to `started` when that end is in the future. A personal deadline that expired while the contest was still open is not extended. Scores, submissions, penalties, violations, and question invalidation are not reset.
-
-The browser cannot lock down OS-level switching; M10 records `visibilitychange` events as `TAB_SWITCH` violations.
 
 Planned next (see `MileStone-doc.md`):
 

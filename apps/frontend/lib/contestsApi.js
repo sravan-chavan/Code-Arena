@@ -49,8 +49,13 @@ export async function setCurrentQuestion(contestId, questionId) {
   return data.session;
 }
 
-export async function reportContestViolation(contestId, type = 'TAB_SWITCH') {
-  const data = await api.post(`/student/contests/${contestId}/violations`, { type });
+export async function reportContestViolation(contestId, typeOrOptions = 'TAB_SWITCH') {
+  const options = typeof typeOrOptions === 'string' ? { type: typeOrOptions } : (typeOrOptions || {});
+  const body = { type: options.type || 'TAB_SWITCH' };
+  if (options.source) body.source = options.source;
+  if (options.clientEventId) body.clientEventId = options.clientEventId;
+  if (options.blurObserved) body.blurObserved = true;
+  const data = await api.post(`/student/contests/${contestId}/violations`, body);
   return data;
 }
 
