@@ -27,6 +27,7 @@ import {
   fetchAdminContestSubmissions,
   fetchAdminViolations,
   questionContests,
+  detachAdminQuestion,
   removeAdminParticipant,
   reorderAdminQuestions,
   scheduleAdminContest,
@@ -55,7 +56,8 @@ const LIBRARY_FILTERS = [
   { id: 'all', label: 'All' },
   { id: 'unassigned', label: 'Unassigned' },
   { id: 'practice', label: 'Practice' },
-  { id: 'assigned', label: 'Assigned' },
+  { id: 'assigned', label: 'Contests' },
+  { id: 'both', label: 'Both' },
 ];
 
 function questionFromRecord(question) {
@@ -94,6 +96,7 @@ export default function AdminContestDetail() {
   const [resumeOpen, setResumeOpen] = useState(false);
   const [extendMinutes, setExtendMinutes] = useState('');
   const [readdTarget, setReaddTarget] = useState(null);
+  const [removeQuestion, setRemoveQuestion] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async (signal) => {
@@ -125,7 +128,7 @@ export default function AdminContestDetail() {
     });
     setSelectedIds((current) => current.filter((questionId) => {
       const question = nextLibrary.find((row) => row.id === questionId);
-      return question && !question.isPractice && !belongsToContest(question, id);
+      return question && !question.archived && !belongsToContest(question, id);
     }));
   }, [id]);
 
@@ -346,6 +349,24 @@ export default function AdminContestDetail() {
     }, 'Question added.');
   }
 
+  async function confirmRemoveQuestion() {
+    if (!removeQuestion) return;
+    setSaving(true);
+    setError('');
+    setSuccess('');
+    try {
+      await detachAdminQuestion(id, removeQuestion.id);
+      setSuccess(`${removeQuestion.title} was removed from this contest. It remains in the Question Bank.`);
+      setRemoveQuestion(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Unable to remove question.');
+      setRemoveQuestion(null);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function handleAttachSelected() {
     if (selectedIds.length === 0 || saving) return;
     await runAction(async () => {
@@ -391,11 +412,15 @@ export default function AdminContestDetail() {
 
   const filteredLibrary = useMemo(() => {
     return library.filter((question) => {
-      const matchesSearch = question.title.toLowerCase().includes(librarySearch.toLowerCase());
+      const needle = librarySearch.toLowerCase();
+      const matchesSearch = question.title.toLowerCase().includes(needle)
+        || (question.description || '').toLowerCase().includes(needle);
       if (!matchesSearch) return false;
-      if (libraryFilter === 'unassigned') return question.assignment === 'unassigned' && !question.isPractice;
-      if (libraryFilter === 'practice') return Boolean(question.isPractice);
-      if (libraryFilter === 'assigned') return question.assignment === 'contest';
+      if (question.archived) return false;
+      if (libraryFilter === 'unassigned') return question.assignment === 'unassigned';
+      if (libraryFilter === 'practice') return question.assignment === 'practice' || question.assignment === 'both';
+      if (libraryFilter === 'assigned') return question.assignment === 'contest' || question.assignment === 'both';
+      if (libraryFilter === 'both') return question.assignment === 'both';
       return true;
     });
   }, [library, libraryFilter, librarySearch]);
@@ -523,7 +548,7 @@ export default function AdminContestDetail() {
         <>
           <Card>
             <h2 className="card-title" style={{ marginBottom: 'var(--space-md)' }}>Problems</h2>
-            {questions.length === 0 ? <p style={{ color: 'var(--text-secondary)' }}>No questions yet.</p> : (
+            {questions.length === 0 ? <p style={{ color: 'var(--text-secondary)' }}>No questions assigned to this contest.</p> : (
               <ul style={{ display: 'grid', gap: 'var(--space-sm)' }}>
                 {questions.map((question, index) => (
                   <li key={question.id} style={{ padding: 'var(--space-sm)', background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)' }}>
@@ -532,8 +557,21 @@ export default function AdminContestDetail() {
                         <strong>{index + 1}. {question.title}</strong>
                         <span style={{ marginLeft: 8, color: 'var(--text-secondary)' }}>{question.difficulty} · {question.testCases?.length || 0} tests · {question.totalPoints ?? 0} pts</span>
                         <div style={{ fontFamily: 'var(--font-code)', fontSize: '0.7rem', color: 'var(--text-muted)' }}>{question.id}</div>
+                        <Link href={`/admin/questions#${question.id}`} style={{ fontSize: '0.8rem' }}>Question Bank</Link>
+                        {question.isPractice ? (
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Also in Practice Arena</div>
+                        ) : null}
                       </div>
-                      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                      <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="btn-sm"
+                          disabled={saving}
+                          onClick={() => setRemoveQuestion(question)}
+                        >
+                          Remove
+                        </Button>
                         <Button
                           type="button"
                           variant="secondary"
@@ -602,7 +640,7 @@ export default function AdminContestDetail() {
             {showLibrary ? (
               <div style={{ marginTop: 'var(--space-md)', display: 'grid', gap: 'var(--space-md)' }}>
                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                  Select existing Question Library problems. Questions already in this contest cannot be added again. Questions belonging to other contests remain selectable. Practice questions cannot be attached.
+                  Select Question Bank problems to add. A question can stay in Practice Arena and belong to other contests. Questions already in this contest cannot be added again. Removing a question does not delete it. Questions that already have submissions stay assigned so scores remain intact.
                 </p>
                 <input
                   className="form-input"
@@ -628,8 +666,7 @@ export default function AdminContestDetail() {
                   <ul style={{ display: 'grid', gap: 'var(--space-sm)' }}>
                     {filteredLibrary.map((question) => {
                       const alreadyHere = belongsToContest(question, id);
-                      const practice = Boolean(question.isPractice);
-                      const blocked = practice || alreadyHere;
+                      const blocked = alreadyHere;
                       const contests = questionContests(question);
                       const selected = selectedIds.includes(question.id);
                       return (
@@ -646,14 +683,14 @@ export default function AdminContestDetail() {
                               <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
                                 {question.difficulty} · {assignmentLabel(question)}
                               </div>
-                              {practice ? (
-                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Practice</div>
-                              ) : alreadyHere ? (
-                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Already Added</div>
+                              {alreadyHere ? (
+                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Already in this contest</div>
                               ) : contests.length > 0 ? (
                                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                                   Assigned to: {contests.map((row) => row.title).join(', ')}
                                 </div>
+                              ) : question.isPractice ? (
+                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Practice Arena only</div>
                               ) : (
                                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Unassigned</div>
                               )}
@@ -906,6 +943,23 @@ export default function AdminContestDetail() {
               <Button type="button" variant="ghost" disabled={saving} onClick={() => setResumeOpen(false)}>Cancel</Button>
               <Button type="button" variant="primary" disabled={saving} onClick={confirmResume}>
                 {saving ? 'Resuming…' : 'Resume Contest'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {removeQuestion ? (
+        <div role="dialog" aria-modal="true" aria-labelledby="remove-question-title" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 40, padding: 'var(--space-md)' }}>
+          <div className="card" style={{ maxWidth: 480, width: '100%' }}>
+            <h2 id="remove-question-title" style={{ fontSize: '1.15rem', marginBottom: 'var(--space-sm)' }}>Remove {removeQuestion.title}?</h2>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: 'var(--space-lg)' }}>
+              This removes the question from this contest only. It stays in the Question Bank and in Practice Arena if it was included there. If students have already submitted it, the assignment is kept so scores do not change.
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-sm)' }}>
+              <Button type="button" variant="ghost" disabled={saving} onClick={() => setRemoveQuestion(null)}>Cancel</Button>
+              <Button type="button" variant="primary" disabled={saving} onClick={confirmRemoveQuestion}>
+                {saving ? 'Removing…' : 'Remove from contest'}
               </Button>
             </div>
           </div>

@@ -241,6 +241,29 @@ export async function deleteAdminTestCase(questionId, testCaseId) {
   return data.testCase;
 }
 
+export async function updateQuestionPlacement(questionId, body) {
+  const data = await api.patch(`/admin/questions/${questionId}/placement`, body);
+  return data.question;
+}
+
+export async function bulkManageQuestions(body) {
+  return api.post('/admin/questions/bulk', body);
+}
+
+export async function deleteAdminQuestion(questionId) {
+  const data = await api.delete(`/admin/questions/${questionId}`);
+  return data.question;
+}
+
+export async function archiveAdminQuestion(questionId) {
+  return api.post(`/admin/questions/${questionId}/archive`, {});
+}
+
+export async function detachAdminQuestion(contestId, questionId) {
+  const data = await api.delete(`/admin/contests/${contestId}/questions/${questionId}`);
+  return data.question;
+}
+
 export function questionContests(question) {
   if (!question || !Array.isArray(question.contests)) return [];
   return question.contests.filter((row) => row && row.id);
@@ -254,9 +277,17 @@ export function belongsToContest(question, contestId) {
 
 export function assignmentLabel(question) {
   if (!question) return 'Unassigned';
-  if (question.assignment === 'practice' || question.isPractice) return 'Practice';
+  if (question.archived || question.assignment === 'archived') return 'Archived';
   const contests = questionContests(question);
-  if (question.assignment === 'contest' || contests.length > 0) {
+  const inPractice = Boolean(question.isPractice || question.assignment === 'practice' || question.assignment === 'both');
+  const inContest = question.assignment === 'contest' || question.assignment === 'both' || contests.length > 0;
+  if (inPractice && inContest) {
+    if (contests.length === 1) return `Practice · ${contests[0].title || 'Contest'}`;
+    if (contests.length > 1) return `Practice · ${contests.length} contests`;
+    return 'Practice and contests';
+  }
+  if (question.assignment === 'practice' || (inPractice && !inContest)) return 'Practice';
+  if (inContest) {
     if (contests.length === 1) return contests[0].title || 'Contest';
     if (contests.length > 1) return `Assigned to ${contests.length} contests`;
     return question.contestTitle || 'Contest';

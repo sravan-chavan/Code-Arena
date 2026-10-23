@@ -24,5 +24,20 @@ describe('Question assignment classification', () => {
     assert.equal(assignmentOf({ contestId: null, isPractice: true }), 'practice');
     assert.equal(assignmentOf({ contests: [], isPractice: false }), 'unassigned');
     assert.equal(assignmentOf({ isPractice: false }), 'unassigned');
+    assert.equal(
+      assignmentOf({
+        isPractice: true,
+        contests: [{ id: '00000000-0000-4000-8000-000000000003', title: 'C' }],
+      }),
+      'both',
+    );
+    assert.equal(
+      assignmentOf({
+        archived: true,
+        isPractice: true,
+        contests: [{ id: '00000000-0000-4000-8000-000000000003', title: 'C' }],
+      }),
+      'archived',
+    );
   });
 });

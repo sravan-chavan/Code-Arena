@@ -149,16 +149,8 @@ async function listAdminContestSubmissions(contestId) {
 
 async function getOwnedPracticeSubmission(user, submissionId) {
   const submission = await submissionRepository.findById(submissionId);
-  if (!submission || submission.userId !== user.id) {
+  if (!submission || submission.userId !== user.id || submission.contestId) {
     throw new AppError('Submission not found', 404, { code: 'NOT_FOUND' });
-  }
-  try {
-    await questionService.getPracticeQuestionForExecution(submission.questionId);
-  } catch (err) {
-    if (err && err.statusCode === 404) {
-      throw new AppError('Submission not found', 404, { code: 'NOT_FOUND' });
-    }
-    throw err;
   }
   return withResults(submission);
 }

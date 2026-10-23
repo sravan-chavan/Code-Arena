@@ -5,6 +5,8 @@ import Card from '@/components/ui/Card';
 import Badge from '@/components/ui/Badge';
 import { metrics, submissions, systemLogs, formatTimestamp } from '@/lib/mockData';
 import { fetchAdminContests } from '@/lib/contestsApi';
+import { fetchAdminUserCount } from '@/lib/usersApi';
+import { ADMIN_USERS_PATH, userTotalLabel } from '@/lib/usersAdmin';
 import { ApiError } from '@/lib/apiClient';
 import ContestTimer from '@/components/ui/ContestTimer';
 import { Users, Activity, CheckCircle, Clock, Server } from 'lucide-react';
@@ -14,6 +16,9 @@ export default function AdminDashboard() {
   const { user, application, applicationError } = useAuth();
   const [contests, setContests] = useState([]);
   const [contestError, setContestError] = useState('');
+  const [totalUsers, setTotalUsers] = useState(null);
+  const [usersLoaded, setUsersLoaded] = useState(false);
+  const [usersError, setUsersError] = useState('');
   const recentLogs = systemLogs.slice(0, 5);
   const recentSubmissions = submissions.slice(0, 5);
   const dashboard = application?.dashboard;
@@ -32,7 +37,30 @@ export default function AdminDashboard() {
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const count = await fetchAdminUserCount();
+        if (!cancelled) setTotalUsers(count);
+      } catch (err) {
+        if (!cancelled) {
+          setTotalUsers(null);
+          setUsersError(err instanceof ApiError ? err.message : 'Unable to load user count.');
+        }
+      } finally {
+        if (!cancelled) setUsersLoaded(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   const activeContests = contests.filter((contest) => contest.status === 'running');
+  const totalUsersLabel = userTotalLabel({
+    loaded: usersLoaded,
+    error: usersError,
+    totalUsers,
+  });
 
   return (
     <div>
@@ -57,17 +85,25 @@ export default function AdminDashboard() {
       </Card>
 
       <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 'var(--space-md)' }}>
-        Active contests below are live API data. Worker, queue, and submission figures remain mock/future data.
+        Total users and active contests are live API data. Worker, queue, and submission figures remain mock data.
       </p>
 
       <div className="stats-grid">
-        <div className="stat-card cyan">
+        <Link
+          href={ADMIN_USERS_PATH}
+          className="stat-card cyan stat-card-link"
+          data-testid="total-users-card"
+          aria-label="Total users, open participant management"
+        >
           <div className="stat-card-header">
-            <span className="stat-card-label">Active Users</span>
+            <span className="stat-card-label">Total Users</span>
             <Users className="stat-card-icon" style={{ color: 'var(--accent-cyan)' }} />
           </div>
-          <div className="stat-card-value">{metrics.connectedParticipants}</div>
-        </div>
+          <div className="stat-card-value" data-testid="dashboard-total-users">{totalUsersLabel}</div>
+          {usersError ? (
+            <div className="stat-card-change" style={{ color: 'var(--accent-rose)' }}>{usersError}</div>
+          ) : null}
+        </Link>
         
         <div className="stat-card purple">
           <div className="stat-card-header">

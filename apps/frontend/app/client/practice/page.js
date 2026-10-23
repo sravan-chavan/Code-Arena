@@ -30,6 +30,8 @@ export default function PracticeArea() {
   const [activeTab, setActiveTab] = useState('problem');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [listSearch, setListSearch] = useState('');
+  const [listDifficulty, setListDifficulty] = useState('all');
 
   useEffect(() => {
     let cancelled = false;
@@ -198,8 +200,32 @@ export default function PracticeArea() {
 
         {activeTab === 'list' ? (
           <div style={{ overflowY: 'auto', flex: 1 }}>
+            <div style={{ display: 'flex', gap: 'var(--space-sm)', marginBottom: 'var(--space-md)', flexWrap: 'wrap' }}>
+              <input className="form-input" placeholder="Search practice questions..." value={listSearch} onChange={(event) => setListSearch(event.target.value)} />
+              <select className="form-select" value={listDifficulty} onChange={(event) => setListDifficulty(event.target.value)}>
+                <option value="all">All Difficulties</option>
+                <option value="easy">Easy</option>
+                <option value="medium">Medium</option>
+                <option value="hard">Hard</option>
+              </select>
+            </div>
+            {problems.filter((problem) => {
+              const matchesSearch = problem.title.toLowerCase().includes(listSearch.trim().toLowerCase())
+                || (problem.description || '').toLowerCase().includes(listSearch.trim().toLowerCase());
+              const matchesDifficulty = listDifficulty === 'all' || problem.difficulty === listDifficulty;
+              return matchesSearch && matchesDifficulty;
+            }).length === 0 ? (
+              <p style={{ color: 'var(--text-secondary)' }}>
+                {problems.length === 0 ? 'No questions assigned to Practice Arena.' : 'No questions match this search.'}
+              </p>
+            ) : null}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-sm)' }}>
-              {problems.map((problem) => (
+              {problems.filter((problem) => {
+                const matchesSearch = problem.title.toLowerCase().includes(listSearch.trim().toLowerCase())
+                  || (problem.description || '').toLowerCase().includes(listSearch.trim().toLowerCase());
+                const matchesDifficulty = listDifficulty === 'all' || problem.difficulty === listDifficulty;
+                return matchesSearch && matchesDifficulty;
+              }).map((problem) => (
                 <button
                   type="button"
                   key={problem.id}

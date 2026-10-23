@@ -419,7 +419,7 @@ async function assertArenaAccess(user, contestId) {
 }
 
 async function assertExecutionAccess(user, question, requestedContestId) {
-  if (!question || question.isPractice || !requestedContestId) {
+  if (!question || !requestedContestId) {
     throw new AppError('Question not found', 404, { code: 'NOT_FOUND' });
   }
   const attached = await questionRepository.isAttached(requestedContestId, question.id);

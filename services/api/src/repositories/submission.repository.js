@@ -136,7 +136,7 @@ async function listByUserPractice(userId, client) {
     `SELECT s.*
      FROM submissions s
      INNER JOIN questions q ON q.id = s.question_id
-     WHERE s.user_id = $1 AND q.is_practice = TRUE
+     WHERE s.user_id = $1 AND s.contest_id IS NULL
      ORDER BY s.created_at DESC
      LIMIT 100`,
     [userId],

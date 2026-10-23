@@ -4,7 +4,8 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/AuthContext';
 import Sidebar from '@/components/ui/Sidebar';
 import TopBar from '@/components/ui/TopBar';
-import { LayoutDashboard, Users, Code, Activity, Settings, Trophy } from 'lucide-react';
+import { LayoutDashboard, Users, Code, Activity, Settings, Trophy, BookOpen } from 'lucide-react';
+import { adminNav } from '@/lib/navigation';
 
 export default function AdminLayout({ children }) {
   const { user, isAuthenticated, isLoading } = useAuth();
@@ -23,14 +24,19 @@ export default function AdminLayout({ children }) {
     return null; // Or a loading spinner
   }
 
-  const adminLinks = [
-    { name: 'Dashboard', href: '/admin', icon: <LayoutDashboard size={20} /> },
-    { name: 'Contests', href: '/admin/contests', icon: <Trophy size={20} /> },
-    { name: 'Question Bank', href: '/admin/questions', icon: <Code size={20} /> },
-    { name: 'Users', href: '/admin/users', icon: <Users size={20} /> },
-    { name: 'System Monitor', href: '/admin/monitor', icon: <Activity size={20} /> },
-    { name: 'Settings', href: '/admin/settings', icon: <Settings size={20} /> },
-  ];
+  const adminIcons = {
+    Dashboard: <LayoutDashboard size={20} />,
+    Contests: <Trophy size={20} />,
+    'Question Bank': <Code size={20} />,
+    'Practice Arena': <BookOpen size={20} />,
+    Users: <Users size={20} />,
+    'System Monitor': <Activity size={20} />,
+    Settings: <Settings size={20} />,
+  };
+  const adminLinks = adminNav.map((item) => ({
+    ...item,
+    icon: adminIcons[item.name],
+  }));
 
   return (
     <div className="page-layout">

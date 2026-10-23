@@ -5,6 +5,7 @@ import { useAuth } from '@/lib/AuthContext';
 import Sidebar from '@/components/ui/Sidebar';
 import TopBar from '@/components/ui/TopBar';
 import { Home, Trophy, BookOpen, Clock } from 'lucide-react';
+import { studentNav } from '@/lib/navigation';
 
 export default function ClientLayout({ children }) {
   const { user, isAuthenticated, isLoading } = useAuth();
@@ -25,12 +26,16 @@ export default function ClientLayout({ children }) {
     return null;
   }
 
-  const clientLinks = [
-    { name: 'Overview', href: '/client', icon: <Home size={20} /> },
-    { name: 'Contests', href: '/client/contests', icon: <Trophy size={20} /> },
-    { name: 'Practice Area', href: '/client/practice', icon: <BookOpen size={20} /> },
-    { name: 'Submissions', href: '/client/submissions', icon: <Clock size={20} /> },
-  ];
+  const studentIcons = {
+    Overview: <Home size={20} />,
+    Contests: <Trophy size={20} />,
+    'Practice Area': <BookOpen size={20} />,
+    Submissions: <Clock size={20} />,
+  };
+  const clientLinks = studentNav.map((item) => ({
+    ...item,
+    icon: studentIcons[item.name],
+  }));
 
   if (arenaMode) {
     return (

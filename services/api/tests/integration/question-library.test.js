@@ -247,7 +247,7 @@ describe('Question library unassigned attach (PostgreSQL)', () => {
     assert.equal(reordered.body.data.questions[0].sortOrder, 0);
   });
 
-  it('rejects duplicate and practice attachment and allows the same question on another contest', async () => {
+  it('rejects duplicate attachment, allows one question on many contests, and keeps practice membership', async () => {
     const contestA = await createDraft();
     const contestB = await createDraft();
     const created = await request(app)
@@ -287,8 +287,15 @@ describe('Question library unassigned attach (PostgreSQL)', () => {
     const practiceAttach = await request(app)
       .post(`/admin/contests/${contestA.id}/questions/${practice.rows[0].id}`)
       .set('Authorization', `Bearer ${adminToken}`)
-      .expect(409);
-    assert.equal(practiceAttach.body.message, 'Practice questions cannot be attached to a contest.');
+      .expect(200);
+    assert.equal(practiceAttach.body.data.question.id, practice.rows[0].id);
+    assert.equal(practiceAttach.body.data.question.isPractice, true);
+    assert.equal(practiceAttach.body.data.question.assignment, 'both');
+    const practiceStill = await query(
+      'SELECT is_practice FROM questions WHERE id = $1',
+      [practice.rows[0].id],
+    );
+    assert.equal(practiceStill.rows[0].is_practice, true);
 
     await request(app)
       .post(`/admin/contests/${contestA.id}/questions/${question.id}`)
@@ -310,6 +317,11 @@ describe('Question library unassigned attach (PostgreSQL)', () => {
       .set('Authorization', `Bearer ${adminToken}`)
       .expect(404);
     assert.match(missingQuestion.body.message, /question not found/i);
+
+    await query(
+      'DELETE FROM contest_questions WHERE question_id = $1 AND contest_id = $2',
+      [practice.rows[0].id, contestA.id],
+    );
   });
 
   it('exposes an attached question to students without hidden tests', async () => {

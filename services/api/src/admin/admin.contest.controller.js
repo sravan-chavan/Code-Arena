@@ -58,10 +58,24 @@ async function resumeContest(req, res) {
   return sendSuccess(res, { contest }, 200);
 }
 
+function hasLibraryFilter(query) {
+  if (!query || typeof query !== 'object') {
+    return false;
+  }
+  return ['q', 'difficulty', 'assignment', 'page', 'pageSize'].some((key) => {
+    const value = query[key];
+    return value !== undefined && value !== null && String(value) !== '';
+  });
+}
+
 async function listQuestions(req, res) {
   const contestId = req.params.id
     ? assertUuid(req.params.id, 'id')
     : undefined;
+  if (!contestId && hasLibraryFilter(req.query)) {
+    const result = await questionService.searchAdminQuestions(req.query);
+    return sendSuccess(res, result, 200);
+  }
   const questions = await questionService.listAdminQuestions(contestId);
   return sendSuccess(res, { questions }, 200);
 }
@@ -152,6 +166,41 @@ async function getQuestion(req, res) {
   return sendSuccess(res, { question }, 200);
 }
 
+async function updatePlacement(req, res) {
+  const result = await questionService.updatePlacement(
+    assertUuid(req.params.questionId, 'questionId'),
+    req.body || {},
+  );
+  return sendSuccess(res, result, 200);
+}
+
+async function bulkManageQuestions(req, res) {
+  const result = await questionService.bulkManage(req.body || {});
+  return sendSuccess(res, result, 200);
+}
+
+async function detachQuestion(req, res) {
+  const question = await questionService.detachQuestion(
+    assertUuid(req.params.id, 'id'),
+    assertUuid(req.params.questionId, 'questionId'),
+  );
+  return sendSuccess(res, { question }, 200);
+}
+
+async function deleteQuestion(req, res) {
+  const question = await questionService.deleteQuestion(
+    assertUuid(req.params.questionId, 'questionId'),
+  );
+  return sendSuccess(res, { question }, 200);
+}
+
+async function archiveQuestion(req, res) {
+  const result = await questionService.archiveQuestion(
+    assertUuid(req.params.questionId, 'questionId'),
+  );
+  return sendSuccess(res, result, 200);
+}
+
 async function listParticipants(req, res) {
   const participants = await contestService.listAdminParticipants(assertUuid(req.params.id, 'id'));
   return sendSuccess(res, { participants }, 200);
@@ -211,6 +260,11 @@ module.exports = {
   deleteTestCase,
   reorderQuestions,
   getQuestion,
+  updatePlacement,
+  bulkManageQuestions,
+  detachQuestion,
+  deleteQuestion,
+  archiveQuestion,
   listParticipants,
   removeParticipant,
   readdParticipant,

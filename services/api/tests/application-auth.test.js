@@ -7,9 +7,13 @@ const TEST_SECRET = 'test-only-jwt-secret-not-for-production-use';
 const PROTECTED = [
   '/admin/me',
   '/admin/dashboard',
+  '/admin/users',
+  '/admin/users/count',
   '/student/me',
   '/student/dashboard',
   '/v1/admin/me',
+  '/v1/admin/users',
+  '/v1/admin/users/count',
   '/v1/student/dashboard',
 ];
 
@@ -46,6 +50,22 @@ describe('Application route authentication (no PostgreSQL)', () => {
 
     assert.equal(admin.body.message, 'Invalid or expired token');
     assert.equal(student.body.message, 'Invalid or expired token');
+  });
+
+  it('returns 401 for unauthenticated admin user registration', async () => {
+    const created = await request(app)
+      .post('/admin/users')
+      .send({ email: 'blocked@example.com', password: 'valid-pass' })
+      .expect(401);
+    const versioned = await request(app)
+      .post('/v1/admin/users')
+      .send({ email: 'blocked@example.com', password: 'valid-pass' })
+      .expect(401);
+
+    assert.equal(created.body.success, false);
+    assert.equal(created.body.message, 'Authentication required');
+    assert.equal(versioned.body.message, 'Authentication required');
+    assert.equal(created.body.stack, undefined);
   });
 
   it('does not expose separate admin or student login endpoints', async () => {
